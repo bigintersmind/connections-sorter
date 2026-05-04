@@ -487,6 +487,12 @@ function UploadScreen({ onCancel, onWords }) {
     try {
       const { createWorker } = await import("tesseract.js");
       worker = await createWorker("eng", 1, {
+        // Self-host worker, core WASM, and language data — the defaults fetch
+        // from jsDelivr/tessdata, which can fail in production with opaque
+        // NetworkError inside the blob worker. See scripts/copy-tesseract-assets.mjs.
+        workerPath: "/tesseract/worker.min.js",
+        corePath: "/tesseract",
+        langPath: "/tesseract",
         logger: (m) => {
           if (m.status === "recognizing text") {
             setStage("Reading text…");
