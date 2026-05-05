@@ -472,7 +472,7 @@ function UploadScreen({ onCancel, onWords }) {
     return () => URL.revokeObjectURL(previewUrl);
   }, [previewUrl]);
 
-  const pickFile = (f) => {
+  const pickFile = useCallback((f) => {
     if (!f) return;
     if (!f.type.startsWith("image/")) {
       setError("Please choose an image file.");
@@ -481,7 +481,7 @@ function UploadScreen({ onCancel, onWords }) {
     setFile(f);
     setPreviewUrl(URL.createObjectURL(f));
     setError(null);
-  };
+  }, []);
 
   const pasteFromClipboard = async () => {
     if (running) return;
@@ -497,6 +497,26 @@ function UploadScreen({ onCancel, onWords }) {
       setError(CLIPBOARD_ERROR_MESSAGES.error);
     }
   };
+
+  // Desktop Cmd/Ctrl+V path. iOS Safari only fires `paste` inside editable
+  // elements, so this listener is effectively desktop-only — that's expected.
+  useEffect(() => {
+    const handlePaste = async (event) => {
+      if (running) return;
+      try {
+        const result = await extractClipboardImage(event.clipboardData?.items);
+        if (result.kind === "ok") {
+          pickFile(result.blob);
+        } else {
+          setError(CLIPBOARD_ERROR_MESSAGES[result.kind]);
+        }
+      } catch {
+        setError(CLIPBOARD_ERROR_MESSAGES.error);
+      }
+    };
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [running, pickFile]);
 
   const runOcr = async () => {
     if (!file) return;
