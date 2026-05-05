@@ -15,10 +15,33 @@ If the user has overridden the canonical role → label string mapping in `docs/
 - **Create an issue**: `bd create "Title" --description -` with the body piped or heredoc'd into stdin. Pass `-t {task,bug,feature,…}` to set the type and `-p N` for priority. Put the entire body — problem statement, design notes, acceptance criteria — in `--description` as one markdown blob (see "Single-blob description" below).
 - **Read an issue**: `bd show <id> --json`. The `<id>` is bd's hierarchical ID (e.g. `bd-a3f8`, or `bd-a3f8.1` for a sub-task).
 - **List issues**: `bd list --status open --json` with appropriate `--label` filters. Use `bd ready --json` instead when you only want unblocked tickets (those whose dependencies are all closed).
-- **Comment on a ticket**: `bd comment add <id> --body "..."`. Use a heredoc for multi-line bodies.
+- **Comment on a ticket**: `bd comment <id> --stdin` with the body piped or heredoc'd into stdin. The CLI takes the body via `--stdin` or `--file` — there is no `--body` flag and no `comment add` subcommand. For a one-liner you can also pass the text as a positional arg: `bd comment <id> "..."`.
 - **Apply / remove labels**: `bd label add <id> <label>` / `bd label remove <id> <label>`. Labels are auto-created on first apply.
 - **Close**: `bd close <id> --reason "..."`. The reason becomes a closing comment in bd's history.
 - **Atomic in-progress claim**: `bd update <id> --claim` sets the assignee to the current user *and* moves status to `in_progress` in one step. Use this in agent loops to avoid the race where two iterations grab the same ticket.
+
+## Closing a ticket cleanly (avoiding the two-commit pattern)
+
+`bd close` and `bd comment` mutate `.beads/issues.jsonl`. The bd pre-commit hook stages those mutations on the *next* commit, so the naive order — code commit, then `bd comment <hash>`, then `bd close` — leaves a second metadata-only commit dangling on top.
+
+Use this order to keep history clean:
+
+1. Run tests, then `git commit` the code changes (the comment can't include the hash until this happens).
+2. `bd comment <id> --stdin <<EOF` with the closing note (commit hash + acceptance criteria satisfied).
+3. `bd close <id> --reason "..."`.
+4. `git commit --amend --no-edit` to fold the `.beads/` mutations from steps 2–3 into the original code commit.
+
+The amend is safe because the branch isn't pushed yet — the AFK loop pushes once at the end of the iteration, after this dance.
+
+## Fetching the agent brief
+
+The brief that `triage` writes lives as a *comment* on the ticket, not a structured field. To pull just the brief out of `bd show`:
+
+```bash
+bd show <id> --json | jq -r '.comments[] | select(.text | contains("## Agent Brief")) | .text'
+```
+
+Filter on the `## Agent Brief` heading rather than indexing `.comments[0]` — comment ordering is not a contract, and triage may have posted other comments before the brief.
 
 ## Single-blob description
 
