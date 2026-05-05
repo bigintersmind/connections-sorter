@@ -493,16 +493,28 @@ function UploadScreen({ onCancel, onWords }) {
       } else {
         setError(CLIPBOARD_ERROR_MESSAGES[result.kind]);
       }
-    } catch {
+    } catch (err) {
+      console.warn("clipboard paste:", err);
       setError(CLIPBOARD_ERROR_MESSAGES.error);
     }
   };
 
-  // Desktop Cmd/Ctrl+V path. iOS Safari only fires `paste` inside editable
-  // elements, so this listener is effectively desktop-only — that's expected.
+  // Window-level Cmd/Ctrl+V handler for the desktop keyboard shortcut. The
+  // on-screen "Paste from clipboard" button goes through `pasteFromClipboard`
+  // above (using `navigator.clipboard.read()`), which is the path iOS uses —
+  // iOS Safari won't fire `paste` on window unless an editable element is
+  // focused. We also bail if the user is pasting *into* an editable element so
+  // we don't hijack a real text paste.
   useEffect(() => {
     const handlePaste = async (event) => {
       if (running) return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        target.closest("input, textarea, [contenteditable]")
+      ) {
+        return;
+      }
       try {
         const result = await extractClipboardImage(event.clipboardData?.items);
         if (result.kind === "ok") {
@@ -510,7 +522,8 @@ function UploadScreen({ onCancel, onWords }) {
         } else {
           setError(CLIPBOARD_ERROR_MESSAGES[result.kind]);
         }
-      } catch {
+      } catch (err) {
+        console.warn("clipboard paste:", err);
         setError(CLIPBOARD_ERROR_MESSAGES.error);
       }
     };

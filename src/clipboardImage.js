@@ -43,7 +43,8 @@ export async function extractClipboardImage(items) {
             const blob = await item.getType(rawType);
             if (blob) return { kind: "ok", blob };
             sawError = true;
-          } catch {
+          } catch (err) {
+            console.warn("clipboard getType:", err);
             sawError = true;
           }
         } else if (REJECTED_TYPES.has(type)) {
@@ -60,7 +61,8 @@ export async function extractClipboardImage(items) {
           const blob = item.getAsFile();
           if (blob) return { kind: "ok", blob };
           sawError = true;
-        } catch {
+        } catch (err) {
+          console.warn("clipboard getAsFile:", err);
           sawError = true;
         }
       } else if (REJECTED_TYPES.has(type)) {
