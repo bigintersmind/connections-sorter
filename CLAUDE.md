@@ -45,7 +45,7 @@ Hosted on Cloudflare Workers + Static Assets (see `wrangler.jsonc`). `not_found_
 
 ### Issue tracker
 
-GitHub Issues, accessed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+bd (beads), accessed via the `bd` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
