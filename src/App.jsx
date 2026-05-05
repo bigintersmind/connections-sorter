@@ -1,4 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import {
+  CLIPBOARD_ERROR_MESSAGES,
+  extractClipboardImage,
+  hasClipboardReadSupport,
+} from "./clipboardImage.js";
 
 const ROW_COLORS = [
   { name: "Yellow", bg: "#f9df6d", text: "#1a1a1a", glow: "rgba(249,223,109,0.6)" },
@@ -458,6 +463,7 @@ function UploadScreen({ onCancel, onWords }) {
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState("");
   const [error, setError] = useState(null);
+  const [clipboardSupported] = useState(hasClipboardReadSupport);
   const inputRef = useRef(null);
 
   // Revoke object URL when the preview changes or unmounts
@@ -475,6 +481,21 @@ function UploadScreen({ onCancel, onWords }) {
     setFile(f);
     setPreviewUrl(URL.createObjectURL(f));
     setError(null);
+  };
+
+  const pasteFromClipboard = async () => {
+    if (running) return;
+    try {
+      const items = await navigator.clipboard.read();
+      const result = await extractClipboardImage(items);
+      if (result.kind === "ok") {
+        pickFile(result.blob);
+      } else {
+        setError(CLIPBOARD_ERROR_MESSAGES[result.kind]);
+      }
+    } catch {
+      setError(CLIPBOARD_ERROR_MESSAGES.error);
+    }
   };
 
   const runOcr = async () => {
@@ -544,14 +565,27 @@ function UploadScreen({ onCancel, onWords }) {
       />
 
       {!previewUrl ? (
-        <button
-          style={styles.dropzone}
-          onClick={() => inputRef.current?.click()}
-        >
-          <span style={{ fontSize: 32 }}>📷</span>
-          <span style={styles.menuLabel}>Choose an image</span>
-          <span style={styles.menuDesc}>PNG or JPG of your Connections grid</span>
-        </button>
+        <div style={styles.dropzoneStack}>
+          <button
+            style={styles.dropzone}
+            onClick={() => inputRef.current?.click()}
+          >
+            <span style={{ fontSize: 32 }}>📷</span>
+            <span style={styles.menuLabel}>Choose an image</span>
+            <span style={styles.menuDesc}>PNG or JPG of your Connections grid</span>
+          </button>
+          {clipboardSupported && (
+            <button
+              style={styles.dropzone}
+              onClick={pasteFromClipboard}
+              disabled={running}
+            >
+              <span style={{ fontSize: 32 }}>📋</span>
+              <span style={styles.menuLabel}>Paste from clipboard</span>
+              <span style={styles.menuDesc}>From a screenshot you copied</span>
+            </button>
+          )}
+        </div>
       ) : (
         <div style={styles.previewWrap}>
           <img src={previewUrl} alt="Puzzle preview" style={styles.previewImg} />
@@ -677,6 +711,12 @@ const styles = {
     color: "#bbb",
     marginTop: 32,
   },
+  dropzoneStack: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+    marginTop: 16,
+  },
   dropzone: {
     display: "flex",
     flexDirection: "column",
@@ -685,7 +725,6 @@ const styles = {
     gap: 8,
     width: "100%",
     padding: "32px 18px",
-    marginTop: 16,
     background: "#fff",
     border: "2px dashed #d5d5cc",
     borderRadius: 14,
