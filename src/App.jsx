@@ -12,6 +12,25 @@ const ROW_COLORS = [
   { name: "Purple", bg: "#ba81c5", text: "#1a1a1a", glow: "rgba(186,129,197,0.6)" },
 ];
 
+// Hand-crafted sample used by the "Try Demo Puzzle" button on the menu.
+// Categories are intentionally legible so the visual structure (color rows,
+// lockable groups) lands faster than the wordplay would.
+const DEMO_PUZZLE_WORDS = [
+  "LEMON", "LIME", "ORANGE", "GRAPEFRUIT",
+  "YACHT", "CANOE", "KAYAK", "FERRY",
+  "RUN", "LEAP", "DASH", "SPRINT",
+  "ROCK", "RUBBER", "JAZZ", "BROADWAY",
+];
+
+function shuffled(arr) {
+  const next = [...arr];
+  for (let i = next.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [next[i], next[j]] = [next[j], next[i]];
+  }
+  return next;
+}
+
 const STORAGE_KEY = "connections-puzzle";
 
 function parseTiles(text) {
@@ -270,42 +289,87 @@ export default function ConnectionsOrganizer() {
 
   if (screen === "menu") {
     return (
-      <div style={styles.container}>
-        <div style={styles.header}>
-          <div style={styles.colorDots}>
+      <main style={styles.container}>
+        <header style={styles.header}>
+          <div style={styles.colorDots} aria-hidden="true">
             {ROW_COLORS.map((c, i) => (
               <span key={i} style={{ ...styles.dot, background: c.bg }} />
             ))}
           </div>
           <h1 style={styles.title}>Connections Sorter</h1>
-          <p style={styles.subtitle}>A Connections companion</p>
+          <p style={styles.tagline}>
+            A scratchpad for the NYT Connections puzzle. Group your guesses
+            into rows, then lock them in before you submit.
+          </p>
+        </header>
+
+        <div style={styles.previewGrid} aria-hidden="true">
+          {ROW_COLORS.map((c, rowIdx) => (
+            <div key={rowIdx} style={styles.previewRow}>
+              {[0, 1, 2, 3].map(colIdx => (
+                <div
+                  key={colIdx}
+                  style={{ ...styles.previewTile, background: c.bg }}
+                />
+              ))}
+            </div>
+          ))}
         </div>
 
-        <div style={styles.menuCards}>
-          <button style={styles.menuCard} onClick={() => setScreen("upload")}>
+        <nav style={styles.menuCards} aria-label="Start a puzzle">
+          <button
+            className="menu-card"
+            style={styles.menuCard}
+            onClick={() => setScreen("upload")}
+            aria-label="Upload a screenshot of a Connections puzzle"
+          >
             <div style={styles.menuCardInner}>
-              <span style={styles.menuIcon}>📷</span>
+              <span style={styles.menuIcon} aria-hidden="true">📷</span>
               <div>
                 <span style={styles.menuLabel}>Upload Screenshot</span>
                 <span style={styles.menuDesc}>Read words from a puzzle image</span>
               </div>
             </div>
           </button>
-          <button style={styles.menuCard} onClick={() => setScreen("manual")}>
+          <button
+            className="menu-card"
+            style={styles.menuCard}
+            onClick={() => setScreen("manual")}
+            aria-label="Type or paste the sixteen puzzle words"
+          >
             <div style={styles.menuCardInner}>
-              <span style={styles.menuIcon}>✏️</span>
+              <span style={styles.menuIcon} aria-hidden="true">✏️</span>
               <div>
                 <span style={styles.menuLabel}>Enter Words</span>
                 <span style={styles.menuDesc}>Type or paste 16 words</span>
               </div>
             </div>
           </button>
-        </div>
+          <button
+            className="menu-card"
+            style={styles.menuCard}
+            onClick={() => loadPuzzle(shuffled(DEMO_PUZZLE_WORDS))}
+            aria-label="Try a sample puzzle to see how the app works"
+          >
+            <div style={styles.menuCardInner}>
+              <span style={styles.menuIcon} aria-hidden="true">🎯</span>
+              <div>
+                <span style={styles.menuLabel}>Try Demo Puzzle</span>
+                <span style={styles.menuDesc}>See how it works with a sample</span>
+              </div>
+            </div>
+          </button>
+        </nav>
 
-        <p style={styles.hint}>
-          Tap two tiles to swap • Lock rows when confident
-        </p>
-      </div>
+        <section style={styles.howItWorks} aria-labelledby="how-heading">
+          <h2 id="how-heading" style={styles.howHeading}>How it works</h2>
+          <ol style={styles.howList}>
+            <li>Load 16 words — upload a screenshot, type them, or try the demo.</li>
+            <li>Tap two tiles to swap them. Group words you think share a category into the same row.</li>
+            <li>Lock rows you're confident in, then enter your guesses on the official NYT game.</li>
+          </ol>
+        </section>
+      </main>
     );
   }
 
@@ -700,6 +764,56 @@ const styles = {
     color: "#999",
     marginTop: 4,
     fontWeight: 400,
+  },
+  tagline: {
+    fontSize: 15,
+    color: "#444",
+    margin: "10px auto 0",
+    fontWeight: 500,
+    lineHeight: 1.45,
+    maxWidth: 380,
+  },
+  previewGrid: {
+    display: "grid",
+    gridTemplateRows: "repeat(4, 1fr)",
+    gap: 6,
+    width: "min(260px, 80%)",
+    margin: "22px auto 0",
+    padding: 10,
+    background: "#fff",
+    border: "1.5px solid #e5e5dd",
+    borderRadius: 14,
+  },
+  previewRow: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, 1fr)",
+    gap: 6,
+  },
+  previewTile: {
+    aspectRatio: "1 / 1",
+    borderRadius: 8,
+  },
+  howItWorks: {
+    marginTop: 28,
+    padding: "16px 18px",
+    background: "#fff",
+    border: "1.5px solid #e5e5dd",
+    borderRadius: 14,
+  },
+  howHeading: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#999",
+    letterSpacing: "1px",
+    textTransform: "uppercase",
+    margin: 0,
+  },
+  howList: {
+    fontSize: 14,
+    color: "#444",
+    lineHeight: 1.5,
+    margin: "10px 0 0",
+    paddingLeft: 22,
   },
   menuCards: {
     display: "flex",
