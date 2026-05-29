@@ -420,6 +420,7 @@ export default function ConnectionsOrganizer() {
           <div style={styles.spinner} aria-hidden="true" />
           <p style={styles.loadingText} role="status">Loading today's puzzle…</p>
           <button
+            className="ghost-btn"
             style={styles.linkBtn}
             onClick={() => {
               autoLoadedRef.current = true;
@@ -430,7 +431,6 @@ export default function ConnectionsOrganizer() {
             Skip — start another way
           </button>
         </div>
-        <style>{"@keyframes spin { to { transform: rotate(360deg); } }"}</style>
       </main>
     );
   }
@@ -475,10 +475,10 @@ export default function ConnectionsOrganizer() {
             <div style={styles.menuCardInner}>
               <span style={styles.menuIcon} aria-hidden="true">📅</span>
               <div>
-                <span style={{ ...styles.menuLabel, color: "#fff" }}>
+                <span style={{ ...styles.menuLabel, color: "var(--primary-text)" }}>
                   {fetching ? "Loading…" : "Today's Puzzle"}
                 </span>
-                <span style={{ ...styles.menuDesc, color: "#cfcfc6" }}>
+                <span style={{ ...styles.menuDesc, color: "var(--primary-text-muted)" }}>
                   Load today's 16 words automatically
                 </span>
               </div>
@@ -489,6 +489,7 @@ export default function ConnectionsOrganizer() {
             {buildRecentDates().slice(1).map(({ date, label }) => (
               <button
                 key={date}
+                className="chip"
                 style={styles.chip}
                 onClick={() => loadToday(date)}
                 disabled={fetching}
@@ -600,8 +601,8 @@ export default function ConnectionsOrganizer() {
           autoFocus
         />
         <div style={styles.btnRow}>
-          <button style={styles.btnSecondary} onClick={() => { setScreen("menu"); setError(null); }}>Back</button>
-          <button style={styles.btnPrimary} onClick={() => {
+          <button className="btn btn-secondary" style={styles.btnSecondary} onClick={() => { setScreen("menu"); setError(null); }}>Back</button>
+          <button className="btn btn-primary" style={styles.btnPrimary} onClick={() => {
             const parsed = parseTiles(manualText);
             if (parsed) {
               loadPuzzle(parsed);
@@ -619,10 +620,10 @@ export default function ConnectionsOrganizer() {
   return (
     <div style={styles.container}>
       <div style={styles.boardHeader}>
-        <button style={styles.backBtn} onClick={() => setScreen("menu")}>← Menu</button>
+        <button className="ghost-btn" style={styles.backBtn} onClick={() => setScreen("menu")}>← Menu</button>
         <div style={{ display: "flex", gap: 8 }}>
-          <button style={styles.smallBtn} onClick={shuffleUnlocked}>Shuffle</button>
-          <button style={styles.smallBtn} onClick={resetBoard}>Reset</button>
+          <button className="btn small-btn" style={styles.smallBtn} onClick={shuffleUnlocked}>Shuffle</button>
+          <button className="btn small-btn" style={styles.smallBtn} onClick={resetBoard}>Reset</button>
         </div>
       </div>
 
@@ -636,11 +637,12 @@ export default function ConnectionsOrganizer() {
             <div key={rowIdx}>
               <div style={styles.rowControl}>
                 <button
+                  className="btn"
                   style={{
                     ...styles.lockBtn,
                     background: locked ? color.bg : "transparent",
-                    color: locked ? color.text : "#999",
-                    borderColor: locked ? color.bg : "#d5d5cc",
+                    color: locked ? color.text : "var(--text-muted)",
+                    borderColor: locked ? color.bg : "var(--border-strong)",
                     fontWeight: locked ? 800 : 600,
                   }}
                   onClick={() => toggleLock(rowIdx)}
@@ -650,10 +652,14 @@ export default function ConnectionsOrganizer() {
                 <input
                   style={{
                     ...styles.labelInput,
-                    borderColor: locked ? `${color.bg}88` : "#e5e5dd",
-                    background: locked ? `${color.bg}18` : "#fff",
+                    borderColor: locked ? `${color.bg}aa` : "var(--border)",
+                    background: locked ? `${color.bg}22` : "var(--input-bg)",
+                    // Once locked, the row is settled — let its label recede so
+                    // the lock button + colored tiles carry the row.
+                    color: locked ? "var(--text-soft)" : "var(--text)",
+                    opacity: locked ? 0.75 : 1,
                   }}
-                  placeholder="Category label..."
+                  placeholder="Category label…"
                   value={labels[rowIdx]}
                   onChange={(e) => updateLabel(rowIdx, e.target.value)}
                 />
@@ -665,34 +671,67 @@ export default function ConnectionsOrganizer() {
                   const isSelected = selected === idx;
                   const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
                   const word = tiles[idx] || "";
-                  const fontSize = word.length > 12 ? 10.5 : word.length > 8 ? 12 : 13.5;
+                  const fontSize = word.length > 12 ? 11 : word.length > 8 ? 12.5 : 14;
+                  // Cascade the entrance top-left → bottom-right, capped so the
+                  // last tile doesn't lag noticeably behind the first.
+                  const revealDelay = Math.min(idx * 22, 330);
+
+                  // Precedence mirrors the original: locked fill wins over the
+                  // selected (picked-up) state; flashing only deepens a locked
+                  // tile's glow. Colors flow through CSS vars so the board
+                  // tracks the light/dark theme automatically.
+                  let bg, fg, borderColor, boxShadow;
+                  if (locked) {
+                    bg = color.bg;
+                    fg = color.text;
+                    borderColor = "transparent";
+                    boxShadow = flashing
+                      ? `0 0 0 1px ${color.bg}, 0 8px 26px ${color.glow}, 0 0 32px ${color.glow}`
+                      : `0 2px 8px ${color.glow}`;
+                  } else if (isSelected) {
+                    bg = "var(--selected-bg)";
+                    fg = "var(--selected-text)";
+                    borderColor = "transparent";
+                    boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
+                  } else {
+                    bg = "var(--tile-bg)";
+                    fg = "var(--tile-text)";
+                    borderColor = "var(--tile-border)";
+                    boxShadow = "var(--tile-shadow)";
+                  }
+                  // Selected tiles lift (you "pick them up"); the partner tile
+                  // tucks during the swap. Resting and locked tiles get no
+                  // inline transform so the CSS `.tile:hover` lift can apply
+                  // (an inline transform would always win over it).
+                  const liftTransform = isSelected
+                    ? "scale(1.05)"
+                    : isSwapping
+                    ? "scale(0.9)"
+                    : undefined;
 
                   return (
-                    <button
+                    <div
                       key={idx}
-                      onClick={() => handleTap(idx)}
-                      style={{
-                        ...styles.tile,
-                        background: locked
-                          ? color.bg
-                          : isSelected ? "#2a2a2a" : "#efefe6",
-                        color: locked
-                          ? color.text
-                          : isSelected ? "#fff" : "#1a1a1a",
-                        fontSize,
-                        transform: isSelected ? "scale(0.94)" : isSwapping ? "scale(0.88)" : "scale(1)",
-                        boxShadow: flashing
-                          ? `0 0 24px ${color.glow}, 0 0 48px ${color.glow}`
-                          : isSelected
-                          ? "0 0 0 2.5px #2a2a2a, 0 4px 14px rgba(0,0,0,0.25)"
-                          : locked
-                          ? `0 1px 4px ${color.glow}`
-                          : "0 1px 3px rgba(0,0,0,0.06)",
-                        animation: flashing ? "flashPulse 0.3s ease-in-out 2" : "none",
-                      }}
+                      className="reveal"
+                      style={{ ...styles.tileCell, animationDelay: `${revealDelay}ms` }}
                     >
-                      {word}
-                    </button>
+                      <button
+                        className="tile"
+                        onClick={() => handleTap(idx)}
+                        style={{
+                          ...styles.tile,
+                          background: bg,
+                          color: fg,
+                          borderColor,
+                          fontSize,
+                          transform: liftTransform,
+                          boxShadow,
+                          animation: flashing ? "lockPop 0.45s ease" : "none",
+                        }}
+                      >
+                        {word}
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -706,14 +745,6 @@ export default function ConnectionsOrganizer() {
           ? "↑ Tap another tile to swap"
           : "Tap a tile to select, then another to swap"}
       </p>
-
-      <style>{`
-        @keyframes flashPulse {
-          0% { transform: scale(1); filter: brightness(1); }
-          50% { transform: scale(1.04); filter: brightness(1.15); }
-          100% { transform: scale(1); filter: brightness(1); }
-        }
-      `}</style>
     </div>
   );
 }
@@ -862,20 +893,22 @@ function UploadScreen({ onCancel, onWords }) {
       {!previewUrl ? (
         <div style={styles.dropzoneStack}>
           <button
+            className="menu-card"
             style={styles.dropzone}
             onClick={() => inputRef.current?.click()}
           >
-            <span style={{ fontSize: 32 }}>📷</span>
+            <span style={{ fontSize: 32, lineHeight: 1 }}>📷</span>
             <span style={styles.menuLabel}>Choose an image</span>
             <span style={styles.menuDesc}>PNG or JPG of your Connections grid</span>
           </button>
           {clipboardSupported && (
             <button
+              className="menu-card"
               style={styles.dropzone}
               onClick={pasteFromClipboard}
               disabled={running}
             >
-              <span style={{ fontSize: 32 }}>📋</span>
+              <span style={{ fontSize: 32, lineHeight: 1 }}>📋</span>
               <span style={styles.menuLabel}>Paste from clipboard</span>
               <span style={styles.menuDesc}>From a screenshot you copied</span>
             </button>
@@ -885,6 +918,7 @@ function UploadScreen({ onCancel, onWords }) {
         <div style={styles.previewWrap}>
           <img src={previewUrl} alt="Puzzle preview" style={styles.previewImg} />
           <button
+            className="btn small-btn"
             style={{ ...styles.smallBtn, alignSelf: "center", marginTop: 8 }}
             onClick={() => inputRef.current?.click()}
             disabled={running}
@@ -904,8 +938,9 @@ function UploadScreen({ onCancel, onWords }) {
       )}
 
       <div style={styles.btnRow}>
-        <button style={styles.btnSecondary} onClick={onCancel} disabled={running}>Back</button>
+        <button className="btn btn-secondary" style={styles.btnSecondary} onClick={onCancel} disabled={running}>Back</button>
         <button
+          className="btn btn-primary"
           style={{ ...styles.btnPrimary, opacity: file && !running ? 1 : 0.5 }}
           onClick={runOcr}
           disabled={!file || running}
@@ -926,8 +961,9 @@ function UploadScreen({ onCancel, onWords }) {
 const styles = {
   container: {
     minHeight: "100vh",
-    background: "#fafaf5",
-    fontFamily: "'Franklin Gothic Medium', 'DIN Condensed', 'Helvetica Neue', sans-serif",
+    background: "transparent",
+    fontFamily: "var(--font)",
+    color: "var(--text)",
     padding: "12px 10px",
     maxWidth: 500,
     margin: "0 auto",
@@ -951,21 +987,21 @@ const styles = {
     display: "inline-block",
   },
   title: {
-    fontSize: 26,
+    fontSize: 27,
     fontWeight: 800,
-    color: "#1a1a1a",
+    color: "var(--text)",
     margin: 0,
-    letterSpacing: "-0.5px",
+    letterSpacing: "-0.6px",
   },
   subtitle: {
     fontSize: 13.5,
-    color: "#999",
+    color: "var(--text-muted)",
     marginTop: 4,
-    fontWeight: 400,
+    fontWeight: 500,
   },
   tagline: {
     fontSize: 15,
-    color: "#444",
+    color: "var(--text-soft)",
     margin: "10px auto 0",
     fontWeight: 500,
     lineHeight: 1.45,
@@ -978,9 +1014,10 @@ const styles = {
     width: "min(260px, 80%)",
     margin: "22px auto 0",
     padding: 10,
-    background: "#fff",
-    border: "1.5px solid #e5e5dd",
-    borderRadius: 14,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 16,
+    boxShadow: "var(--card-shadow)",
   },
   previewRow: {
     display: "grid",
@@ -994,21 +1031,22 @@ const styles = {
   howItWorks: {
     marginTop: 28,
     padding: "16px 18px",
-    background: "#fff",
-    border: "1.5px solid #e5e5dd",
-    borderRadius: 14,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 16,
+    boxShadow: "var(--card-shadow)",
   },
   howHeading: {
     fontSize: 12,
     fontWeight: 700,
-    color: "#999",
+    color: "var(--text-muted)",
     letterSpacing: "1px",
     textTransform: "uppercase",
     margin: 0,
   },
   howList: {
     fontSize: 14,
-    color: "#444",
+    color: "var(--text-soft)",
     lineHeight: 1.5,
     margin: "10px 0 0",
     paddingLeft: 22,
@@ -1022,12 +1060,14 @@ const styles = {
   menuCard: {
     display: "flex",
     padding: "16px 18px",
-    background: "#fff",
-    border: "1.5px solid #e5e5dd",
-    borderRadius: 14,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 16,
     cursor: "pointer",
     textAlign: "left",
-    transition: "all 0.15s",
+    boxShadow: "var(--card-shadow)",
+    fontFamily: "var(--font)",
+    color: "var(--text)",
     WebkitTapHighlightColor: "transparent",
   },
   menuCardInner: {
@@ -1037,22 +1077,27 @@ const styles = {
   },
   menuIcon: {
     fontSize: 24,
+    lineHeight: 1,
   },
   menuLabel: {
     display: "block",
     fontSize: 16,
     fontWeight: 700,
-    color: "#1a1a1a",
+    color: "var(--text)",
   },
   menuDesc: {
     display: "block",
     fontSize: 13,
-    color: "#999",
+    color: "var(--text-muted)",
     marginTop: 1,
   },
   menuCardPrimary: {
-    background: "#1a1a1a",
-    border: "1.5px solid #1a1a1a",
+    background: "var(--primary)",
+    border: "1px solid var(--primary)",
+    // The auto-load default path — give it a little extra height and lift so it
+    // sits above the secondary cards rather than reading as one of a flat list.
+    padding: "19px 18px",
+    boxShadow: "0 3px 8px rgba(40, 37, 26, 0.10), 0 12px 28px rgba(40, 37, 26, 0.14)",
   },
   chipRow: {
     display: "flex",
@@ -1061,15 +1106,15 @@ const styles = {
     marginTop: -4,
   },
   chip: {
-    padding: "6px 12px",
+    padding: "6px 13px",
     fontSize: 12.5,
     fontWeight: 600,
-    background: "#fff",
-    color: "#555",
-    border: "1.5px solid #e5e5dd",
+    background: "var(--surface)",
+    color: "var(--text-muted)",
+    border: "1px solid var(--border)",
     borderRadius: 999,
     cursor: "pointer",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
     WebkitTapHighlightColor: "transparent",
   },
   loadingWrap: {
@@ -1083,22 +1128,22 @@ const styles = {
     width: 34,
     height: 34,
     borderRadius: "50%",
-    border: "3px solid #e5e5dd",
-    borderTopColor: "#1a1a1a",
+    border: "3px solid var(--border)",
+    borderTopColor: "var(--text)",
     animation: "spin 0.8s linear infinite",
   },
   loadingText: {
     fontSize: 14,
-    color: "#777",
+    color: "var(--text-muted)",
     margin: 0,
   },
   linkBtn: {
     background: "none",
     border: "none",
     fontSize: 13,
-    color: "#999",
+    color: "var(--text-muted)",
     cursor: "pointer",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
     textDecoration: "underline",
     padding: 6,
   },
@@ -1110,12 +1155,12 @@ const styles = {
     display: "inline-block",
     fontSize: 13.5,
     fontWeight: 600,
-    color: "#555",
+    color: "var(--text-muted)",
     textDecoration: "none",
   },
   disclaimerText: {
     fontSize: 11.5,
-    color: "#bbb",
+    color: "var(--text-faint)",
     lineHeight: 1.45,
     margin: "8px auto 0",
     maxWidth: 320,
@@ -1123,7 +1168,7 @@ const styles = {
   hint: {
     textAlign: "center",
     fontSize: 12.5,
-    color: "#bbb",
+    color: "var(--text-faint)",
     marginTop: 32,
   },
   dropzoneStack: {
@@ -1140,11 +1185,13 @@ const styles = {
     gap: 8,
     width: "100%",
     padding: "32px 18px",
-    background: "#fff",
-    border: "2px dashed #d5d5cc",
-    borderRadius: 14,
+    background: "var(--surface)",
+    border: "2px dashed var(--border-strong)",
+    borderRadius: 16,
     cursor: "pointer",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
+    color: "var(--text)",
+    boxShadow: "var(--card-shadow)",
     WebkitTapHighlightColor: "transparent",
   },
   previewWrap: {
@@ -1152,16 +1199,17 @@ const styles = {
     flexDirection: "column",
     marginTop: 16,
     padding: 12,
-    background: "#fff",
-    border: "1.5px solid #e5e5dd",
-    borderRadius: 14,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 16,
+    boxShadow: "var(--card-shadow)",
   },
   previewImg: {
     width: "100%",
     maxHeight: 320,
     objectFit: "contain",
-    borderRadius: 8,
-    background: "#f5f5ee",
+    borderRadius: 10,
+    background: "var(--bg)",
   },
   progressWrap: {
     marginTop: 14,
@@ -1169,38 +1217,39 @@ const styles = {
   progressBar: {
     width: "100%",
     height: 8,
-    background: "#eee9d8",
+    background: "var(--border)",
     borderRadius: 999,
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
-    background: "#1a1a1a",
+    background: "var(--text)",
     transition: "width 0.2s ease",
   },
   progressLabel: {
     textAlign: "center",
     fontSize: 12,
-    color: "#777",
+    color: "var(--text-muted)",
     marginTop: 6,
   },
   error: {
-    color: "#c44",
+    color: "var(--error-text)",
     fontSize: 13,
     textAlign: "center",
     marginTop: 10,
-    padding: "6px 10px",
-    background: "#fff5f5",
-    borderRadius: 8,
+    padding: "7px 12px",
+    background: "var(--error-bg)",
+    borderRadius: 10,
   },
   textarea: {
     width: "100%",
     padding: 14,
     fontSize: 14,
-    fontFamily: "inherit",
-    border: "1.5px solid #ddd",
-    borderRadius: 12,
-    background: "#fff",
+    fontFamily: "var(--font)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: 14,
+    background: "var(--input-bg)",
+    color: "var(--text)",
     boxSizing: "border-box",
     resize: "vertical",
     outline: "none",
@@ -1216,112 +1265,117 @@ const styles = {
     padding: "13px 20px",
     fontSize: 15,
     fontWeight: 700,
-    background: "#1a1a1a",
-    color: "#fff",
+    background: "var(--primary)",
+    color: "var(--primary-text)",
     border: "none",
-    borderRadius: 10,
+    borderRadius: 12,
     cursor: "pointer",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
   },
   btnSecondary: {
     flex: 1,
     padding: "13px 20px",
     fontSize: 15,
     fontWeight: 600,
-    background: "#fff",
-    color: "#1a1a1a",
-    border: "1.5px solid #ddd",
-    borderRadius: 10,
+    background: "var(--surface)",
+    color: "var(--text)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: 12,
     cursor: "pointer",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
   },
   boardHeader: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 8,
+    paddingTop: 4,
   },
   backBtn: {
     background: "none",
     border: "none",
     fontSize: 15,
-    color: "#555",
+    color: "var(--text-muted)",
     cursor: "pointer",
     padding: "6px 0",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
+    fontWeight: 600,
   },
   smallBtn: {
-    padding: "6px 14px",
-    fontSize: 12,
+    padding: "7px 14px",
+    fontSize: 12.5,
     fontWeight: 600,
-    background: "#fff",
-    color: "#1a1a1a",
-    border: "1.5px solid #ddd",
-    borderRadius: 8,
+    background: "var(--surface)",
+    color: "var(--text)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: 9,
     cursor: "pointer",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
   },
   grid: {
     display: "flex",
     flexDirection: "column",
-    gap: 0,
+    gap: 14,
   },
   rowControl: {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    marginBottom: 4,
-    marginTop: 8,
+    marginBottom: 6,
   },
   lockBtn: {
-    fontSize: 11,
-    padding: "3px 9px",
-    borderRadius: 6,
-    border: "1.5px solid",
+    fontSize: 11.5,
+    padding: "4px 10px",
+    borderRadius: 7,
+    border: "1px solid",
     cursor: "pointer",
     whiteSpace: "nowrap",
-    fontFamily: "inherit",
+    fontFamily: "var(--font)",
+    fontWeight: 600,
     transition: "all 0.2s",
   },
   labelInput: {
     flex: 1,
-    fontSize: 12,
-    padding: "3px 8px",
+    fontSize: 12.5,
+    padding: "5px 10px",
     border: "1px solid",
-    borderRadius: 6,
+    borderRadius: 7,
     outline: "none",
-    fontFamily: "inherit",
-    color: "#555",
+    fontFamily: "var(--font)",
+    color: "var(--text)",
     transition: "all 0.2s",
   },
   tileRow: {
     display: "grid",
     gridTemplateColumns: "repeat(4, 1fr)",
-    gap: 5,
+    gap: 6,
+  },
+  tileCell: {
+    aspectRatio: "1",
   },
   tile: {
-    aspectRatio: "1",
-    border: "none",
-    borderRadius: 9,
+    width: "100%",
+    height: "100%",
+    border: "1.5px solid transparent",
+    borderRadius: 11,
     cursor: "pointer",
     fontWeight: 700,
-    fontFamily: "'Franklin Gothic Medium', 'DIN Condensed', 'Helvetica Neue', sans-serif",
+    fontFamily: "var(--font)",
     textTransform: "uppercase",
-    letterSpacing: "0.2px",
+    letterSpacing: "0.3px",
     lineHeight: 1.15,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     textAlign: "center",
     padding: "5px 3px",
-    transition: "transform 0.15s, background 0.2s, box-shadow 0.3s",
     WebkitTapHighlightColor: "transparent",
     wordBreak: "break-word",
   },
   boardHint: {
     textAlign: "center",
-    fontSize: 12,
-    color: "#bbb",
-    marginTop: 14,
+    fontSize: 12.5,
+    color: "var(--text-faint)",
+    marginTop: 16,
   },
 };
