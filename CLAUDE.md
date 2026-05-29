@@ -8,10 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev      # Vite dev server at http://localhost:5173 (predev mirrors Tesseract assets)
 npm run build    # Production build → ./dist (prebuild mirrors Tesseract assets)
 npm run lint     # ESLint over .js/.jsx
+npm test         # Vitest (run once) — currently only worker/puzzle.test.js
 npm run preview  # Serve the built ./dist locally
 ```
 
-There is no test runner configured. Lint is the only automated check.
+Vitest covers `worker/puzzle.js` (the puzzle fetch/transform + date-window logic) — pure functions plus an injectable `fetchImpl`, no jsdom needed. The worker handler, the Vite dev middleware, and `src/App.jsx`'s async load logic are **not** yet covered. Lint still runs over everything; `**/*.test.js` gets Vitest globals in `eslint.config.js`.
 
 ## Architecture
 

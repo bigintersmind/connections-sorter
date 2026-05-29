@@ -28,4 +28,12 @@ export default defineConfig([
       globals: { ...globals.browser, ...globals.node },
     },
   },
+  // Vitest test files — add the test-runner globals (describe/it/expect/vi).
+  {
+    files: ['**/*.test.js'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node, ...globals.vitest },
+    },
+  },
 ])
