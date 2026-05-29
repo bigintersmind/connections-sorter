@@ -3,8 +3,8 @@
 // Used by BOTH the Cloudflare Worker (worker/index.js, in production and
 // `wrangler dev`) and the Vite dev middleware (vite.config.js, in `npm run
 // dev`) so /api/puzzle behaves identically everywhere. It depends only on web
-// platform globals (fetch, Intl, Date) that exist in both the Workers runtime
-// and Node, so it can be imported from either side.
+// platform globals common to both the Workers runtime and Node — `fetch`,
+// `Intl`, `Date`, `console` — so it can be imported from either side.
 //
 // The load-bearing contract: this returns ONLY the 16 words, in board-position
 // (display) order — NYT's own scrambled layout. It deliberately DISCARDS the

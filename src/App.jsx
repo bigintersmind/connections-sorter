@@ -297,7 +297,14 @@ export default function ConnectionsOrganizer() {
       // The Worker already returns clean, uppercased words; pass them through
       // verbatim so accented tiles (e.g. "EL NIÑO") aren't mangled by the
       // OCR/manual-entry normalizer.
-      loadPuzzle(words);
+      //
+      // Only commit if this request is still live. A resolved fetch never
+      // rejects, so the catch below can't guard this path: if the user hit
+      // Skip or started another load while the fetch/parse was in flight, the
+      // signal is aborted (Skip, supersede, and timeout all set it), and
+      // dropping the words here stops an already-settled request from yanking
+      // the user onto the board they navigated away from.
+      if (!controller.signal.aborted) loadPuzzle(words);
     } catch {
       // A user-initiated cancel must not flash a self-inflicted error or pull
       // the user off the screen they chose. A timeout or real failure still
@@ -307,8 +314,14 @@ export default function ConnectionsOrganizer() {
       setScreen("menu");
     } finally {
       clearTimeout(timeout);
-      if (fetchAbortRef.current === controller) fetchAbortRef.current = null;
-      setFetching(false);
+      // Only the live request clears the shared fetching state. A superseded
+      // request (its controller already replaced in the ref by a newer load)
+      // must not flip "Loading…" off while that newer request is still in
+      // flight. A skipped/timed-out request keeps the ref, so it still clears.
+      if (fetchAbortRef.current === controller) {
+        fetchAbortRef.current = null;
+        setFetching(false);
+      }
     }
   }, [loadPuzzle]);
 
