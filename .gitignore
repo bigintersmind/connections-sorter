@@ -33,3 +33,6 @@ public/tesseract/
 .dolt/
 *.db
 .beads-credential-key
+
+# Cloudflare Wrangler local dev cache/state
+.wrangler/

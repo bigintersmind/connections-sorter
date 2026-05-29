@@ -6,8 +6,9 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
   globalIgnores(['dist', 'public/tesseract']),
+  // React app code.
   {
-    files: ['**/*.{js,jsx}'],
+    files: ['src/**/*.{js,jsx}'],
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -16,6 +17,15 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+  },
+  // Worker + build/dev tooling — plain JS on web + node globals, no React
+  // fast-refresh constraints.
+  {
+    files: ['worker/**/*.js', '*.config.js'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
     },
   },
 ])

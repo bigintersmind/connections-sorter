@@ -2,8 +2,13 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "connections-sorter",
   "compatibility_date": "2026-05-03",
+  "main": "worker/index.js",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Always run the Worker for /api/* so the puzzle proxy isn't shadowed by
+    // the SPA asset fallback; everything else stays asset-first.
+    "run_worker_first": ["/api/*"]
   }
 }

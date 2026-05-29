@@ -33,6 +33,49 @@ function shuffled(arr) {
 
 const STORAGE_KEY = "connections-puzzle";
 
+const OFFICIAL_GAME_URL = "https://www.nytimes.com/games/connections";
+
+// Daily-puzzle date helpers. These build the chip labels client-side; the
+// Worker (worker/puzzle.js) is the source of truth for which dates are
+// actually loadable, so a stale clock here just shows a wrong label, never a
+// wrong puzzle.
+const PUZZLE_LAUNCH_DATE = "2023-06-12";
+const RECENT_WINDOW_DAYS = 6; // today + this many prior days
+
+function todayET() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+}
+
+// Calendar arithmetic on a YYYY-MM-DD string, DST-safe (operates in UTC).
+function addDays(isoDate, delta) {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + delta);
+  return dt.toISOString().slice(0, 10);
+}
+
+// Today + recent days (down to launch), each with a short chip label.
+function buildRecentDates() {
+  const today = todayET();
+  const out = [];
+  for (let i = 0; i <= RECENT_WINDOW_DAYS; i++) {
+    const date = addDays(today, -i);
+    if (date < PUZZLE_LAUNCH_DATE) break;
+    let label;
+    if (i === 0) label = "Today";
+    else if (i === 1) label = "Yesterday";
+    else {
+      const [y, m, d] = date.split("-").map(Number);
+      label = new Intl.DateTimeFormat("en-US", {
+        weekday: "short",
+        timeZone: "UTC",
+      }).format(new Date(Date.UTC(y, m - 1, d)));
+    }
+    out.push({ date, label });
+  }
+  return out;
+}
+
 function parseTiles(text) {
   if (!text) return null;
   try {
@@ -192,7 +235,7 @@ function loadSaved() {
 
 export default function ConnectionsOrganizer() {
   const saved = useState(loadSaved)[0];
-  const [screen, setScreen] = useState(saved ? "board" : "menu");
+  const [screen, setScreen] = useState(saved ? "board" : "loading");
   const [tiles, setTiles] = useState(saved?.tiles ?? []);
   const [selected, setSelected] = useState(null);
   const [lockedRows, setLockedRows] = useState(saved?.lockedRows ?? [false, false, false, false]);
@@ -201,6 +244,9 @@ export default function ConnectionsOrganizer() {
   const [manualText, setManualText] = useState("");
   const [error, setError] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
+  const autoLoadedRef = useRef(false);
 
   // Persist on changes
   useEffect(() => {
@@ -221,6 +267,44 @@ export default function ConnectionsOrganizer() {
     setError(null);
     setScreen("board");
   }, []);
+
+  // Fetch the day's 16 words from our same-origin Worker proxy (which strips
+  // the answer groupings server-side) and drop them onto the board. Any
+  // failure or timeout falls back to the menu so OCR/manual stay available —
+  // it never blocks the user with a blank board or hard error.
+  const loadToday = useCallback(async (date) => {
+    setFetching(true);
+    setFetchError(null);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 9000);
+    try {
+      const url = date ? `/api/puzzle?date=${encodeURIComponent(date)}` : "/api/puzzle";
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) throw new Error("fetch_failed");
+      const data = await res.json();
+      const words = Array.isArray(data?.words) ? data.words : null;
+      if (!words || words.length !== 16) throw new Error("bad_data");
+      // The Worker already returns clean, uppercased words; pass them through
+      // verbatim so accented tiles (e.g. "EL NIÑO") aren't mangled by the
+      // OCR/manual-entry normalizer.
+      loadPuzzle(words);
+    } catch {
+      setFetchError("Couldn't load that puzzle automatically — upload a screenshot or enter the words instead.");
+      setScreen("menu");
+    } finally {
+      clearTimeout(timeout);
+      setFetching(false);
+    }
+  }, [loadPuzzle]);
+
+  // Auto-load today's words on first visit when there's no saved puzzle to
+  // resume. A saved puzzle takes precedence (resume on the board); the menu's
+  // "Today's Puzzle" card is the manual path in that case.
+  useEffect(() => {
+    if (saved || autoLoadedRef.current) return;
+    autoLoadedRef.current = true;
+    loadToday();
+  }, [saved, loadToday]);
 
   const handleTap = useCallback((index) => {
     const row = Math.floor(index / 4);
@@ -287,6 +371,32 @@ export default function ConnectionsOrganizer() {
     setSelected(null);
   }, [lockedRows]);
 
+  if (screen === "loading") {
+    return (
+      <main style={styles.container}>
+        <header style={styles.header}>
+          <div style={styles.colorDots} aria-hidden="true">
+            {ROW_COLORS.map((c, i) => (
+              <span key={i} style={{ ...styles.dot, background: c.bg }} />
+            ))}
+          </div>
+          <h1 style={styles.title}>Connections Sorter</h1>
+        </header>
+        <div style={styles.loadingWrap}>
+          <div style={styles.spinner} aria-hidden="true" />
+          <p style={styles.loadingText} role="status">Loading today's puzzle…</p>
+          <button
+            style={styles.linkBtn}
+            onClick={() => { autoLoadedRef.current = true; setScreen("menu"); }}
+          >
+            Skip — start another way
+          </button>
+        </div>
+        <style>{"@keyframes spin { to { transform: rotate(360deg); } }"}</style>
+      </main>
+    );
+  }
+
   if (screen === "menu") {
     return (
       <main style={styles.container}>
@@ -317,6 +427,41 @@ export default function ConnectionsOrganizer() {
         </div>
 
         <nav style={styles.menuCards} aria-label="Start a puzzle">
+          <button
+            className="menu-card"
+            style={{ ...styles.menuCard, ...styles.menuCardPrimary }}
+            onClick={() => loadToday()}
+            disabled={fetching}
+            aria-label="Load today's Connections puzzle words"
+          >
+            <div style={styles.menuCardInner}>
+              <span style={styles.menuIcon} aria-hidden="true">📅</span>
+              <div>
+                <span style={{ ...styles.menuLabel, color: "#fff" }}>
+                  {fetching ? "Loading…" : "Today's Puzzle"}
+                </span>
+                <span style={{ ...styles.menuDesc, color: "#cfcfc6" }}>
+                  Load today's 16 words automatically
+                </span>
+              </div>
+            </div>
+          </button>
+
+          <div style={styles.chipRow} role="group" aria-label="Load a recent puzzle">
+            {buildRecentDates().slice(1).map(({ date, label }) => (
+              <button
+                key={date}
+                style={styles.chip}
+                onClick={() => loadToday(date)}
+                disabled={fetching}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {fetchError && <p style={styles.error}>{fetchError}</p>}
+
           <button
             className="menu-card"
             style={styles.menuCard}
@@ -364,11 +509,26 @@ export default function ConnectionsOrganizer() {
         <section style={styles.howItWorks} aria-labelledby="how-heading">
           <h2 id="how-heading" style={styles.howHeading}>How it works</h2>
           <ol style={styles.howList}>
-            <li>Load 16 words — upload a screenshot, type them, or try the demo.</li>
+            <li>Today's words load automatically — or upload a screenshot, type them, or try the demo.</li>
             <li>Tap two tiles to swap them. Group words you think share a category into the same row.</li>
             <li>Lock rows you're confident in, then enter your guesses on the official NYT game.</li>
           </ol>
         </section>
+
+        <footer style={styles.disclaimer}>
+          <a
+            href={OFFICIAL_GAME_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={styles.officialLink}
+          >
+            Play the official NYT Connections ↗
+          </a>
+          <p style={styles.disclaimerText}>
+            An independent helper — not affiliated with, endorsed by, or sponsored by
+            The New York Times.
+          </p>
+        </footer>
       </main>
     );
   }
@@ -851,6 +1011,76 @@ const styles = {
     fontSize: 13,
     color: "#999",
     marginTop: 1,
+  },
+  menuCardPrimary: {
+    background: "#1a1a1a",
+    border: "1.5px solid #1a1a1a",
+  },
+  chipRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: -4,
+  },
+  chip: {
+    padding: "6px 12px",
+    fontSize: 12.5,
+    fontWeight: 600,
+    background: "#fff",
+    color: "#555",
+    border: "1.5px solid #e5e5dd",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    WebkitTapHighlightColor: "transparent",
+  },
+  loadingWrap: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 14,
+    marginTop: 64,
+  },
+  spinner: {
+    width: 34,
+    height: 34,
+    borderRadius: "50%",
+    border: "3px solid #e5e5dd",
+    borderTopColor: "#1a1a1a",
+    animation: "spin 0.8s linear infinite",
+  },
+  loadingText: {
+    fontSize: 14,
+    color: "#777",
+    margin: 0,
+  },
+  linkBtn: {
+    background: "none",
+    border: "none",
+    fontSize: 13,
+    color: "#999",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    textDecoration: "underline",
+    padding: 6,
+  },
+  disclaimer: {
+    textAlign: "center",
+    marginTop: 24,
+  },
+  officialLink: {
+    display: "inline-block",
+    fontSize: 13.5,
+    fontWeight: 600,
+    color: "#555",
+    textDecoration: "none",
+  },
+  disclaimerText: {
+    fontSize: 11.5,
+    color: "#bbb",
+    lineHeight: 1.45,
+    margin: "8px auto 0",
+    maxWidth: 320,
   },
   hint: {
     textAlign: "center",
