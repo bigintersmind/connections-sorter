@@ -35,6 +35,10 @@ const STORAGE_KEY = "connections-puzzle";
 
 const OFFICIAL_GAME_URL = "https://www.nytimes.com/games/connections";
 
+// Abort reason for a user-initiated cancel (Skip, or starting another load),
+// so it can be told apart from a timeout/failure abort.
+const SKIP_REASON = "user-skip";
+
 // Daily-puzzle date helpers. These build the chip labels client-side; the
 // Worker (worker/puzzle.js) is the source of truth for which dates are
 // actually loadable, so a stale clock here just shows a wrong label, never a
@@ -247,6 +251,7 @@ export default function ConnectionsOrganizer() {
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState(null);
   const autoLoadedRef = useRef(false);
+  const fetchAbortRef = useRef(null);
 
   // Persist on changes
   useEffect(() => {
@@ -273,10 +278,15 @@ export default function ConnectionsOrganizer() {
   // failure or timeout falls back to the menu so OCR/manual stay available —
   // it never blocks the user with a blank board or hard error.
   const loadToday = useCallback(async (date) => {
+    // Cancel any in-flight load (tapping another day, or Skip) so a stale
+    // request can't later yank the user onto the board. SKIP_REASON marks it
+    // as user-initiated so the catch below stays silent.
+    fetchAbortRef.current?.abort(SKIP_REASON);
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
     setFetching(true);
     setFetchError(null);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
+    const timeout = setTimeout(() => controller.abort("timeout"), 9000);
     try {
       const url = date ? `/api/puzzle?date=${encodeURIComponent(date)}` : "/api/puzzle";
       const res = await fetch(url, { signal: controller.signal });
@@ -289,13 +299,24 @@ export default function ConnectionsOrganizer() {
       // OCR/manual-entry normalizer.
       loadPuzzle(words);
     } catch {
+      // A user-initiated cancel must not flash a self-inflicted error or pull
+      // the user off the screen they chose. A timeout or real failure still
+      // falls back to the menu.
+      if (controller.signal.reason === SKIP_REASON) return;
       setFetchError("Couldn't load that puzzle automatically — upload a screenshot or enter the words instead.");
       setScreen("menu");
     } finally {
       clearTimeout(timeout);
+      if (fetchAbortRef.current === controller) fetchAbortRef.current = null;
       setFetching(false);
     }
   }, [loadPuzzle]);
+
+  // Cancel an in-flight today-load so a slow request can't complete later and
+  // hijack the screen the user has since chosen (Skip, Upload, Enter, Demo).
+  const cancelPendingFetch = useCallback(() => {
+    fetchAbortRef.current?.abort(SKIP_REASON);
+  }, []);
 
   // Auto-load today's words on first visit when there's no saved puzzle to
   // resume. A saved puzzle takes precedence (resume on the board); the menu's
@@ -387,7 +408,11 @@ export default function ConnectionsOrganizer() {
           <p style={styles.loadingText} role="status">Loading today's puzzle…</p>
           <button
             style={styles.linkBtn}
-            onClick={() => { autoLoadedRef.current = true; setScreen("menu"); }}
+            onClick={() => {
+              autoLoadedRef.current = true;
+              cancelPendingFetch();
+              setScreen("menu");
+            }}
           >
             Skip — start another way
           </button>
@@ -465,7 +490,7 @@ export default function ConnectionsOrganizer() {
           <button
             className="menu-card"
             style={styles.menuCard}
-            onClick={() => setScreen("upload")}
+            onClick={() => { cancelPendingFetch(); setScreen("upload"); }}
             aria-label="Upload a screenshot of a Connections puzzle"
           >
             <div style={styles.menuCardInner}>
@@ -479,7 +504,7 @@ export default function ConnectionsOrganizer() {
           <button
             className="menu-card"
             style={styles.menuCard}
-            onClick={() => setScreen("manual")}
+            onClick={() => { cancelPendingFetch(); setScreen("manual"); }}
             aria-label="Type or paste the sixteen puzzle words"
           >
             <div style={styles.menuCardInner}>
@@ -493,7 +518,7 @@ export default function ConnectionsOrganizer() {
           <button
             className="menu-card"
             style={styles.menuCard}
-            onClick={() => loadPuzzle(shuffled(DEMO_PUZZLE_WORDS))}
+            onClick={() => { cancelPendingFetch(); loadPuzzle(shuffled(DEMO_PUZZLE_WORDS)); }}
             aria-label="Try a sample puzzle to see how the app works"
           >
             <div style={styles.menuCardInner}>

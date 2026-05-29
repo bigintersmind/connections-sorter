@@ -72,26 +72,58 @@ export async function fetchPuzzleWords(date, { fetchImpl = fetch } = {}) {
   let res;
   try {
     res = await fetchImpl(nytEndpoint(date), { headers: { Accept: "application/json" } });
-  } catch {
+  } catch (err) {
+    console.error(`[puzzle] upstream unreachable for ${date}: ${err?.message ?? err}`);
     throw new PuzzleError("upstream_unreachable", 502);
   }
-  if (res.status === 404) throw new PuzzleError("not_found", 404);
-  if (!res.ok) throw new PuzzleError("upstream_error", 502);
+  if (res.status === 404) {
+    // Within our enforced window a 404 is unexpected (puzzle pulled, or the
+    // endpoint path changed) — worth a breadcrumb, but it's a soft failure.
+    console.warn(`[puzzle] upstream 404 for ${date}`);
+    throw new PuzzleError("not_found", 404);
+  }
+  if (!res.ok) {
+    console.error(`[puzzle] unexpected upstream status ${res.status} for ${date}`);
+    throw new PuzzleError("upstream_error", 502);
+  }
 
   let data;
   try {
     data = await res.json();
   } catch {
+    console.error(`[puzzle] upstream returned non-JSON for ${date}`);
     throw new PuzzleError("upstream_error", 502);
   }
 
   const words = extractWords(data);
-  if (!words) throw new PuzzleError("upstream_error", 502);
+  if (!words) {
+    // A permanent NYT schema change breaks this feature for 100% of users and
+    // is otherwise indistinguishable from a transient blip. Emit a distinct
+    // code plus a non-sensitive shape fingerprint (never the words) so it's
+    // visible in `wrangler tail` / the dev terminal and can be alerted on.
+    console.error(`[puzzle] schema mismatch for ${date}: ${fingerprint(data)}`);
+    throw new PuzzleError("schema_mismatch", 502);
+  }
 
   return {
     date: typeof data.print_date === "string" ? data.print_date : date,
     words,
   };
+}
+
+// Describe an unexpected payload's shape (top-level keys + category/card
+// counts) without leaking the puzzle content itself.
+function fingerprint(data) {
+  if (!data || typeof data !== "object") return `type=${typeof data}`;
+  const cats = Array.isArray(data.categories) ? data.categories : null;
+  const cards = cats
+    ? cats.reduce((n, c) => n + (Array.isArray(c?.cards) ? c.cards.length : 0), 0)
+    : null;
+  return JSON.stringify({
+    keys: Object.keys(data),
+    categories: cats ? cats.length : typeof data.categories,
+    cards,
+  });
 }
 
 // Pull the 16 words out, ordered by board position, with all grouping/category

@@ -45,9 +45,12 @@ async function handlePuzzle(request, url, ctx) {
     ctx.waitUntil(cache.put(cacheKey, response.clone()));
     return response;
   } catch (err) {
-    const status = err instanceof PuzzleError ? err.status : 502;
-    const code = err instanceof PuzzleError ? err.code : "upstream_error";
-    return json({ error: code }, status);
+    if (err instanceof PuzzleError) {
+      // Already logged with detail at the point of failure in puzzle.js.
+      return json({ error: err.code }, err.status);
+    }
+    console.error(`[puzzle] unexpected handler error for ${date}: ${err?.message ?? err}`);
+    return json({ error: "upstream_error" }, 502);
   }
 }
 

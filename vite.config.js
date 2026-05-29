@@ -29,6 +29,7 @@ function devPuzzleApi() {
           res.statusCode = 200
           res.end(JSON.stringify(payload))
         } catch (err) {
+          if (!(err instanceof PuzzleError)) console.error(`[puzzle] dev middleware error: ${err?.message ?? err}`)
           res.statusCode = err instanceof PuzzleError ? err.status : 502
           res.end(JSON.stringify({ error: err instanceof PuzzleError ? err.code : 'upstream_error' }))
         }
