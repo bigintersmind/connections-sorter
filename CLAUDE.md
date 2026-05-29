@@ -18,6 +18,12 @@ Vitest covers `worker/puzzle.js` (the puzzle fetch/transform + date-window logic
 
 Single-page React 19 + Vite app. Almost all logic lives in `src/App.jsx` — the file contains the root component, the upload screen, the OCR pipeline, and an inline `styles` object. There is no router, no state library, no CSS framework. State persists to `localStorage` under `connections-puzzle`.
 
+### Theming (light/dark — the inline-styles + CSS-vars split)
+
+The `styles` object in `App.jsx` is still inline, but **every color is a `var(--token)`**, never a literal — the only intentional hex literals are `ROW_COLORS` (the four Connections tile colors, which are the puzzle's identity and are *not* themed; their text stays dark because all four are light pastels). The tokens live in `src/index.css` under `:root`, with a `@media (prefers-color-scheme: dark)` block that re-points the same variables. So **dark mode is automatic and has no React state** — the OS scheme flips the CSS vars and the whole UI follows. Inline styles can't do `:hover`/`:focus-visible`/`@media`/keyframes, so those (card/tile hover lifts, the shared focus ring, the `tileIn` staggered board reveal, `lockPop`, `spin`, `prefers-reduced-motion`) live in `index.css` and attach via `className`. When adding UI: use a token (add light+dark values if it's a new one), not a hex; add a `className` for any hover/focus/animation. `index.html` carries the light/dark `theme-color` metas and paints the page background pre-hydration to avoid a flash.
+
+Type is **self-hosted Libre Franklin** (the open Franklin Gothic NYT itself uses) via `@fontsource-variable/libre-franklin`, imported in `main.jsx` and bundled by Vite — no Google Fonts request (keeps the privacy-forward, own-origin posture). Don't switch it to a CDN `<link>`; the `--font` token already lists the fallback stack.
+
 ### OCR pipeline (the non-obvious part)
 
 When a user uploads a screenshot, `UploadScreen.runOcr` lazy-imports `tesseract.js` (so it isn't in the initial bundle) and runs a multi-stage extraction:
