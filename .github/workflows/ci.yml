@@ -1,0 +1,34 @@
+name: CI
+
+# Runs the quality gates so they actually guard main — a test nothing runs
+# protects nothing. Triggers on PRs targeting main and on pushes to main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel a superseded run when new commits land on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Vite 8 / ESLint 10 need Node 20.19+ or 22.12+; pin current LTS.
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      # `build` runs prebuild, which mirrors Tesseract assets and downloads the
+      # language data over the network (idempotent). Catches build breakage too.
+      - run: npm run build
