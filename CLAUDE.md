@@ -8,15 +8,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev      # Vite dev server at http://localhost:5173 (predev mirrors Tesseract assets)
 npm run build    # Production build → ./dist (prebuild mirrors Tesseract assets)
 npm run lint     # ESLint over .js/.jsx
-npm test         # Vitest (run once) — currently only worker/puzzle.test.js
+npm test         # Vitest (run once) — worker/puzzle.test.js + src/fitTileFont.test.js
 npm run preview  # Serve the built ./dist locally
 ```
 
-Vitest covers `worker/puzzle.js` (the puzzle fetch/transform + date-window logic) — pure functions plus an injectable `fetchImpl`, no jsdom needed. The worker handler, the Vite dev middleware, and `src/App.jsx`'s async load logic are **not** yet covered. Lint still runs over everything; `**/*.test.js` gets Vitest globals in `eslint.config.js`.
+Vitest covers two pure modules — `worker/puzzle.js` (the puzzle fetch/transform + date-window logic, via an injectable `fetchImpl`) and `src/fitTileFont.js` (the tile shrink-to-fit loop, fed stub elements) — so no jsdom is needed. The worker handler, the Vite dev middleware, and `src/App.jsx`'s async load logic are **not** yet covered. Lint still runs over everything; `**/*.test.js` gets Vitest globals in `eslint.config.js`.
 
 ## Architecture
 
-Single-page React 19 + Vite app. Almost all logic lives in `src/App.jsx` — the file contains the root component, the upload screen, the OCR pipeline, and an inline `styles` object. There is no router, no state library, no CSS framework. State persists to `localStorage` under `connections-puzzle`.
+Single-page React 19 + Vite app. Most logic lives in `src/App.jsx` — the root component, the upload screen, the OCR pipeline, and an inline `styles` object. Pure, framework-free helpers are extracted so they can be unit-tested without a DOM: `src/clipboardImage.js` (clipboard/paste MIME policy) and `src/fitTileFont.js` (tile shrink-to-fit). There is no router, no state library, no CSS framework. State persists to `localStorage` under `connections-puzzle`.
 
 ### Theming (light/dark — the inline-styles + CSS-vars split)
 
@@ -44,6 +44,16 @@ Tesseract.js by default fetches `worker.min.js`, the core WASM, and `eng.trained
 
 Don't remove the predev/prebuild scripts, don't switch to CDN paths, and don't add legacy (non-LSTM) core variants — they'd be dead weight.
 
+### Daily words (the Cloudflare Worker proxy)
+
+`src/App.jsx` auto-loads the current day's puzzle on launch by fetching `GET /api/puzzle` (optionally `?date=YYYY-MM-DD`). The endpoint exists because NYT's puzzle JSON sends no CORS header, so the browser can't read it directly:
+
+- **Production**: `worker/index.js` is the Worker entry. `wrangler.jsonc` sets `run_worker_first: ["/api/*"]` so the handler — not the SPA asset fallback — sees the request. It fetches NYT server-side, strips the answer groupings down to the 16 words, and edge-caches the transformed result per date.
+- **Dev**: `vite.config.js`'s `devPuzzleApi` middleware serves the same `/api/puzzle` route during `npm run dev` using the *same* `worker/puzzle.js` functions, so the flow works locally without `wrangler dev`.
+- `worker/puzzle.js` owns the fetch/transform + date-window logic (`fetchPuzzleWords`, `resolvePuzzleDate`, `PuzzleError`) and is the part under Vitest.
+
+Keep the answer groupings out of the response: the app is a word *loader*, not a solver.
+
 ## Deployment
 
 Hosted on Cloudflare Workers + Static Assets (see `wrangler.jsonc`). `not_found_handling: "single-page-application"` means unknown paths fall back to `index.html`. The deployed asset set is whatever ends up in `./dist`, which includes `public/tesseract/*` after the build.
@@ -65,6 +75,30 @@ Single-context. See `docs/agents/domain.md`.
 ### AFK loop
 
 Installed at `ralph/`. Run `./ralph/afk.sh <N>` to loop on `ready-for-agent` tickets, or `./ralph/once.sh` for a single iteration. Worktree-isolated on the `ralph` branch.
+
+## Non-Interactive Shell Commands
+
+**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+
+Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+
+**Use these forms instead:**
+```bash
+# Force overwrite without prompting
+cp -f source dest           # NOT: cp source dest
+mv -f source dest           # NOT: mv source dest
+rm -f file                  # NOT: rm file
+
+# For recursive operations
+rm -rf directory            # NOT: rm -r directory
+cp -rf source dest          # NOT: cp -r source dest
+```
+
+**Other commands that may prompt:**
+- `scp` - use `-o BatchMode=yes` for non-interactive
+- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
+- `apt-get` - use `-y` flag
+- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
