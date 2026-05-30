@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import {
   CLIPBOARD_ERROR_MESSAGES,
   extractClipboardImage,
@@ -237,6 +237,27 @@ function loadSaved() {
   }
 }
 
+// Tile text matches the official app: words never break mid-string. Multi-word
+// entries wrap at spaces; a single word that's too wide shrinks instead. CSS
+// can't size text to its own length, so we measure the rendered button and step
+// the font down until the content stops overflowing its square (or hits the
+// floor). Runs in useLayoutEffect (pre-paint, no flash) and on resize/rotate.
+const MAX_TILE_FONT = 14;
+const MIN_TILE_FONT = 8;
+function fitTileFont(el) {
+  let fs = MAX_TILE_FONT;
+  el.style.fontSize = fs + "px";
+  // +1px tolerance absorbs sub-pixel rounding so tiles that already fit don't
+  // shrink a needless step.
+  while (
+    fs > MIN_TILE_FONT &&
+    (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
+  ) {
+    fs -= 0.5;
+    el.style.fontSize = fs + "px";
+  }
+}
+
 export default function ConnectionsOrganizer() {
   const saved = useState(loadSaved)[0];
   const [screen, setScreen] = useState(saved ? "board" : "loading");
@@ -252,6 +273,22 @@ export default function ConnectionsOrganizer() {
   const [fetchError, setFetchError] = useState(null);
   const autoLoadedRef = useRef(false);
   const fetchAbortRef = useRef(null);
+  const tileRefs = useRef([]);
+
+  // Shrink-to-fit every tile's font once the board is on screen and whenever
+  // the words change. `screen` is a dep so tiles get fit when we first land on
+  // the board (navigating menu→board doesn't touch `tiles`). Re-fits on resize
+  // and orientation change so words stay whole at any width.
+  useLayoutEffect(() => {
+    const fitAll = () => {
+      for (const el of tileRefs.current) {
+        if (el) fitTileFont(el);
+      }
+    };
+    fitAll();
+    window.addEventListener("resize", fitAll);
+    return () => window.removeEventListener("resize", fitAll);
+  }, [tiles, screen]);
 
   // Persist on changes
   useEffect(() => {
@@ -671,7 +708,6 @@ export default function ConnectionsOrganizer() {
                   const isSelected = selected === idx;
                   const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
                   const word = tiles[idx] || "";
-                  const fontSize = word.length > 12 ? 11 : word.length > 8 ? 12.5 : 14;
                   // Cascade the entrance top-left → bottom-right, capped so the
                   // last tile doesn't lag noticeably behind the first.
                   const revealDelay = Math.min(idx * 22, 330);
@@ -717,13 +753,15 @@ export default function ConnectionsOrganizer() {
                     >
                       <button
                         className="tile"
+                        ref={el => (tileRefs.current[idx] = el)}
                         onClick={() => handleTap(idx)}
                         style={{
                           ...styles.tile,
                           background: bg,
                           color: fg,
                           borderColor,
-                          fontSize,
+                          // fontSize is owned by fitTileFont (DOM-measured),
+                          // not React, so it isn't reset on re-render.
                           transform: liftTransform,
                           boxShadow,
                           animation: flashing ? "lockPop 0.45s ease" : "none",
@@ -1347,7 +1385,12 @@ const styles = {
   },
   tileRow: {
     display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
+    // minmax(0, 1fr), not 1fr: a 1fr track's min size is its content's
+    // min-content, so an unbreakable long word (PENNSYLVANIA) would blow the
+    // column wider than its share and push the grid past the viewport. Capping
+    // at 0 keeps all four columns equal and lets the word overflow its cell,
+    // which is exactly what fitTileFont measures and shrinks to fit.
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
     gap: 6,
   },
   tileCell: {
@@ -1370,7 +1413,11 @@ const styles = {
     textAlign: "center",
     padding: "5px 3px",
     WebkitTapHighlightColor: "transparent",
-    wordBreak: "break-word",
+    // Wrap only at spaces — never split a word. Single words that are too wide
+    // are shrunk to fit by fitTileFont instead of being broken mid-string.
+    overflowWrap: "normal",
+    wordBreak: "normal",
+    hyphens: "none",
   },
   boardHint: {
     textAlign: "center",
