@@ -1,9 +1,10 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import {
   CLIPBOARD_ERROR_MESSAGES,
   extractClipboardImage,
   hasClipboardReadSupport,
 } from "./clipboardImage.js";
+import { fitTileFont } from "./fitTileFont.js";
 
 const ROW_COLORS = [
   { name: "Yellow", bg: "#f9df6d", text: "#1a1a1a", glow: "rgba(249,223,109,0.6)" },
@@ -252,6 +253,29 @@ export default function ConnectionsOrganizer() {
   const [fetchError, setFetchError] = useState(null);
   const autoLoadedRef = useRef(false);
   const fetchAbortRef = useRef(null);
+  const tileRefs = useRef([]);
+
+  // Shrink-to-fit every tile's font once the board is on screen and whenever
+  // the words change. `screen` is a dep so tiles get fit when we first land on
+  // the board (navigating menu→board doesn't touch `tiles`). Re-fits on resize
+  // (which also fires on device rotation) so words stay whole at any width.
+  useLayoutEffect(() => {
+    const fitAll = () => {
+      for (const el of tileRefs.current) {
+        if (el) fitTileFont(el);
+      }
+    };
+    fitAll();
+    // Libre Franklin is self-hosted and loads async, so the pre-paint pass above
+    // can measure the fallback font, whose metrics differ. Re-fit once the real
+    // font lands so a long word isn't frozen at a fallback-measured size.
+    // `fonts.ready` resolves immediately when fonts are already in, so this is
+    // one extra pass at most; fitAll reads the live tileRefs, so a late resolve
+    // after a re-render is harmless (unmounted tiles are null and skipped).
+    document.fonts?.ready.then(fitAll);
+    window.addEventListener("resize", fitAll);
+    return () => window.removeEventListener("resize", fitAll);
+  }, [tiles, screen]);
 
   // Persist on changes
   useEffect(() => {
@@ -671,7 +695,6 @@ export default function ConnectionsOrganizer() {
                   const isSelected = selected === idx;
                   const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
                   const word = tiles[idx] || "";
-                  const fontSize = word.length > 12 ? 11 : word.length > 8 ? 12.5 : 14;
                   // Cascade the entrance top-left → bottom-right, capped so the
                   // last tile doesn't lag noticeably behind the first.
                   const revealDelay = Math.min(idx * 22, 330);
@@ -717,13 +740,15 @@ export default function ConnectionsOrganizer() {
                     >
                       <button
                         className="tile"
+                        ref={el => (tileRefs.current[idx] = el)}
                         onClick={() => handleTap(idx)}
                         style={{
                           ...styles.tile,
                           background: bg,
                           color: fg,
                           borderColor,
-                          fontSize,
+                          // fontSize is owned by fitTileFont (DOM-measured),
+                          // not React, so it isn't reset on re-render.
                           transform: liftTransform,
                           boxShadow,
                           animation: flashing ? "lockPop 0.45s ease" : "none",
@@ -1347,7 +1372,12 @@ const styles = {
   },
   tileRow: {
     display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
+    // minmax(0, 1fr), not 1fr: a 1fr track's min size is its content's
+    // min-content, so an unbreakable long word (PENNSYLVANIA) would blow the
+    // column wider than its share and push the grid past the viewport. Capping
+    // at 0 keeps all four columns equal and lets the word overflow its cell,
+    // which is exactly what fitTileFont measures and shrinks to fit.
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
     gap: 6,
   },
   tileCell: {
@@ -1368,9 +1398,22 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     textAlign: "center",
-    padding: "5px 3px",
+    // Horizontal padding keeps words off the box edges (matching the official
+    // app). It's part of clientWidth, so fitTileFont shrinks long words a touch
+    // more to respect this margin rather than letting them run to the side.
+    // Tuned empirically: more than this tips a two-word tile into wrapping on a
+    // narrow (~375px) phone.
+    padding: "5px 5px",
     WebkitTapHighlightColor: "transparent",
-    wordBreak: "break-word",
+    // Wrap only at spaces — never split a word. Single words that are too wide
+    // are shrunk to fit by fitTileFont instead of being broken mid-string.
+    overflowWrap: "normal",
+    wordBreak: "normal",
+    hyphens: "none",
+    // A word still too wide at the MIN_TILE_FONT floor would otherwise spill out
+    // of its rounded box into the neighboring tile; clip it at the edge so an
+    // unavoidable overflow degrades cleanly instead of looking like a bug.
+    overflow: "hidden",
   },
   boardHint: {
     textAlign: "center",
