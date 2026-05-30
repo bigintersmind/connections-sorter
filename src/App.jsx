@@ -1411,7 +1411,12 @@ const styles = {
     alignItems: "center",
     justifyContent: "center",
     textAlign: "center",
-    padding: "5px 3px",
+    // Horizontal padding keeps words off the box edges (matching the official
+    // app). It's part of clientWidth, so fitTileFont shrinks long words a touch
+    // more to respect this margin rather than letting them run to the side.
+    // 5px is the ceiling that still keeps a two-word tile like "WET DOG" on one
+    // line down to a 375px-wide phone; more padding tips it into wrapping.
+    padding: "5px 5px",
     WebkitTapHighlightColor: "transparent",
     // Wrap only at spaces — never split a word. Single words that are too wide
     // are shrunk to fit by fitTileFont instead of being broken mid-string.
