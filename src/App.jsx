@@ -4,6 +4,7 @@ import {
   extractClipboardImage,
   hasClipboardReadSupport,
 } from "./clipboardImage.js";
+import { fitTileFont } from "./fitTileFont.js";
 
 const ROW_COLORS = [
   { name: "Yellow", bg: "#f9df6d", text: "#1a1a1a", glow: "rgba(249,223,109,0.6)" },
@@ -237,27 +238,6 @@ function loadSaved() {
   }
 }
 
-// Tile text matches the official app: words never break mid-string. Multi-word
-// entries wrap at spaces; a single word that's too wide shrinks instead. CSS
-// can't size text to its own length, so we measure the rendered button and step
-// the font down until the content stops overflowing its square (or hits the
-// floor). Runs in useLayoutEffect (pre-paint, no flash) and on resize/rotate.
-const MAX_TILE_FONT = 14;
-const MIN_TILE_FONT = 8;
-function fitTileFont(el) {
-  let fs = MAX_TILE_FONT;
-  el.style.fontSize = fs + "px";
-  // +1px tolerance absorbs sub-pixel rounding so tiles that already fit don't
-  // shrink a needless step.
-  while (
-    fs > MIN_TILE_FONT &&
-    (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
-  ) {
-    fs -= 0.5;
-    el.style.fontSize = fs + "px";
-  }
-}
-
 export default function ConnectionsOrganizer() {
   const saved = useState(loadSaved)[0];
   const [screen, setScreen] = useState(saved ? "board" : "loading");
@@ -278,7 +258,7 @@ export default function ConnectionsOrganizer() {
   // Shrink-to-fit every tile's font once the board is on screen and whenever
   // the words change. `screen` is a dep so tiles get fit when we first land on
   // the board (navigating menu→board doesn't touch `tiles`). Re-fits on resize
-  // and orientation change so words stay whole at any width.
+  // (which also fires on device rotation) so words stay whole at any width.
   useLayoutEffect(() => {
     const fitAll = () => {
       for (const el of tileRefs.current) {
@@ -286,6 +266,13 @@ export default function ConnectionsOrganizer() {
       }
     };
     fitAll();
+    // Libre Franklin is self-hosted and loads async, so the pre-paint pass above
+    // can measure the fallback font, whose metrics differ. Re-fit once the real
+    // font lands so a long word isn't frozen at a fallback-measured size.
+    // `fonts.ready` resolves immediately when fonts are already in, so this is
+    // one extra pass at most; fitAll reads the live tileRefs, so a late resolve
+    // after a re-render is harmless (unmounted tiles are null and skipped).
+    document.fonts?.ready.then(fitAll);
     window.addEventListener("resize", fitAll);
     return () => window.removeEventListener("resize", fitAll);
   }, [tiles, screen]);
@@ -1414,8 +1401,8 @@ const styles = {
     // Horizontal padding keeps words off the box edges (matching the official
     // app). It's part of clientWidth, so fitTileFont shrinks long words a touch
     // more to respect this margin rather than letting them run to the side.
-    // 5px is the ceiling that still keeps a two-word tile like "WET DOG" on one
-    // line down to a 375px-wide phone; more padding tips it into wrapping.
+    // Tuned empirically: more than this tips a two-word tile into wrapping on a
+    // narrow (~375px) phone.
     padding: "5px 5px",
     WebkitTapHighlightColor: "transparent",
     // Wrap only at spaces — never split a word. Single words that are too wide
@@ -1423,6 +1410,10 @@ const styles = {
     overflowWrap: "normal",
     wordBreak: "normal",
     hyphens: "none",
+    // A word still too wide at the MIN_TILE_FONT floor would otherwise spill out
+    // of its rounded box into the neighboring tile; clip it at the edge so an
+    // unavoidable overflow degrades cleanly instead of looking like a bug.
+    overflow: "hidden",
   },
   boardHint: {
     textAlign: "center",
