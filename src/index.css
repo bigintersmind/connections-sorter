@@ -196,6 +196,17 @@ textarea:focus-visible,
   outline-offset: 2px;
 }
 
+/* Transient notice (the post-swap resume offer) slides in under the board
+   header. Kept as a shared class: the "Today's puzzle is ready" banner reuses
+   this exact treatment. */
+.notice {
+  animation: noticeIn 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes noticeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+
 /* Staggered board entrance — applied to each tile's wrapper with an inline
    animation-delay so the grid cascades in top-left to bottom-right. */
 .reveal {

@@ -5,6 +5,17 @@ import {
   hasClipboardReadSupport,
 } from "./clipboardImage.js";
 import { fitTileFont } from "./fitTileFont.js";
+import {
+  applyDailySwap,
+  applyLegacyDaily,
+  boardSummary,
+  dateLabel,
+  decideLaunch,
+  isStaleDaily,
+  parseStore,
+  serializeStore,
+  swapBoards,
+} from "./savedPuzzle.js";
 
 const ROW_COLORS = [
   { name: "Yellow", bg: "#f9df6d", text: "#1a1a1a", glow: "rgba(249,223,109,0.6)" },
@@ -222,31 +233,77 @@ function reconstructTilesFromBboxes(words) {
   });
 }
 
+// Read the saved two-slot store ({ current, previous }) or null. All shape
+// knowledge — including migrating pre-metadata flat blobs — lives in
+// savedPuzzle.js; the try/catch here only covers localStorage itself being
+// unavailable (private mode, storage disabled).
 function loadSaved() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.tiles) || data.tiles.length !== 16) return null;
-    return {
-      tiles: data.tiles,
-      lockedRows: data.lockedRows || [false, false, false, false],
-      labels: data.labels || ["", "", "", ""],
-    };
+    return parseStore(localStorage.getItem(STORAGE_KEY));
   } catch {
     return null;
   }
 }
 
+// The slice of a board the app keeps in React state next to tiles/locks/labels.
+function metaOf(board) {
+  return {
+    date: board.date,
+    source: board.source,
+    chosenExplicitly: board.chosenExplicitly,
+  };
+}
+
+// Full weekday for the resume notice ("Resume Monday's board"), formatted from
+// the ISO parts in UTC like every other date label here.
+function weekdayLong(dateISO) {
+  if (!dateISO) return null;
+  const [y, m, d] = dateISO.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(
+    new Date(Date.UTC(y, m - 1, d)),
+  );
+}
+
 export default function ConnectionsOrganizer() {
-  const saved = useState(loadSaved)[0];
-  const [screen, setScreen] = useState(saved ? "board" : "loading");
-  const [tiles, setTiles] = useState(saved?.tiles ?? []);
+  // The save and the launch decision are taken once, at mount — a re-render
+  // after ET midnight must not re-decide and yank a board mid-play (refocus
+  // handling is connections-7a4's slice).
+  const [{ saved, launch }] = useState(() => {
+    const stored = loadSaved();
+    return { saved: stored, launch: decideLaunch(stored, todayET()) };
+  });
+  // "resume" lands straight on the board; "fetch-today" and "fetch-swap" both
+  // go through the loading screen (state below still holds the old board on
+  // the swap path, so a failed fetch can fall back to it untouched).
+  const [screen, setScreen] = useState(launch === "resume" ? "board" : "loading");
+  const [tiles, setTiles] = useState(saved?.current.tiles ?? []);
   const [selected, setSelected] = useState(null);
-  const [lockedRows, setLockedRows] = useState(saved?.lockedRows ?? [false, false, false, false]);
+  const [lockedRows, setLockedRows] = useState(saved?.current.lockedRows ?? [false, false, false, false]);
   const [flashRow, setFlashRow] = useState(null);
-  const [labels, setLabels] = useState(saved?.labels ?? ["", "", "", ""]);
+  const [labels, setLabels] = useState(saved?.current.labels ?? ["", "", "", ""]);
+  // Provenance of the board on screen: { date?, source, chosenExplicitly }.
+  // Stamped by every load path and persisted alongside the play state so a
+  // returning visit can tell a stale daily board from a deliberate choice.
+  const [boardMeta, setBoardMeta] = useState(() => (saved ? metaOf(saved.current) : null));
+  // The board offered by the transient resume notice (the one just moved to
+  // the previous slot). React state only — never persisted — so it shows at
+  // swap time and is gone on the next reload, by design.
+  const [resumeNotice, setResumeNotice] = useState(null);
+  // "Today's puzzle is ready" banner: shown when the stale-board launch path
+  // couldn't deliver today's puzzle (fetch failure, or the user hit Skip) and
+  // the old board is on screen instead. Its action retries the swap. Same
+  // transient React-state-only lifetime as the notice; structurally it can
+  // only appear on non-exempt stale dailies, because only those launch with
+  // a swapFrom.
+  const [todayBanner, setTodayBanner] = useState(false);
+  // The previous-board slot. React state (not a ref) because the menu's
+  // "Resume previous board" card renders from it; persisted alongside the
+  // current board on every write.
+  const [previousBoard, setPreviousBoard] = useState(saved?.previous ?? null);
   const [manualText, setManualText] = useState("");
+  // Whether the manual screen was reached via OCR ("ocr") or typed directly
+  // ("manual") — decides the source stamped when its Load Puzzle commits.
+  const [manualSource, setManualSource] = useState("manual");
   const [error, setError] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
   const [fetching, setFetching] = useState(false);
@@ -277,23 +334,45 @@ export default function ConnectionsOrganizer() {
     return () => window.removeEventListener("resize", fitAll);
   }, [tiles, screen]);
 
-  // Persist on changes
+  // Persist on changes. Writing through serializeStore means a resumed legacy
+  // save is rewritten in the two-slot shape (with source "unknown") on its
+  // first persist — the migration is this effect doing its normal job.
   useEffect(() => {
     if (tiles.length === 16) {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ tiles, lockedRows, labels }));
+        localStorage.setItem(
+          STORAGE_KEY,
+          serializeStore({
+            current: {
+              tiles,
+              lockedRows,
+              labels,
+              ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+            },
+            previous: previousBoard,
+          }),
+        );
       } catch {
         // storage unavailable — silent
       }
     }
-  }, [tiles, lockedRows, labels]);
+  }, [tiles, lockedRows, labels, boardMeta, previousBoard]);
 
-  const loadPuzzle = useCallback((words) => {
+  // Drop a fresh set of words onto the board. `meta` records where they came
+  // from (see boardMeta above); callers that can't know better default to
+  // unknown provenance.
+  const loadPuzzle = useCallback((words, meta) => {
     setTiles(words);
     setLockedRows([false, false, false, false]);
     setLabels(["", "", "", ""]);
+    setBoardMeta(meta ?? { source: "unknown", chosenExplicitly: false });
     setSelected(null);
     setError(null);
+    // A fresh load invalidates any pending resume offer and satisfies the
+    // "today's puzzle is ready" banner. The swap path re-sets the notice
+    // right after this call, in the same render batch.
+    setResumeNotice(null);
+    setTodayBanner(false);
     setScreen("board");
   }, []);
 
@@ -301,7 +380,14 @@ export default function ConnectionsOrganizer() {
   // the answer groupings server-side) and drop them onto the board. Any
   // failure or timeout falls back to the menu so OCR/manual stay available —
   // it never blocks the user with a blank board or hard error.
-  const loadToday = useCallback(async (date) => {
+  // `swapFrom` is set only by the stale-board launch path: on success the old
+  // board (passed as swapFrom) moves to the previous slot and the notice
+  // offers it back; on failure we fall back to resuming it instead of the
+  // menu, since there's a perfectly good board to show.
+  // `compareFrom` is the legacy-save launch path: the fetch settles whether
+  // the pre-metadata board is already today's (word comparison) before
+  // deciding to stamp it in place or swap it out.
+  const loadToday = useCallback(async (date, { swapFrom, compareFrom } = {}) => {
     // Cancel any in-flight load (tapping another day, or Skip) so a stale
     // request can't later yank the user onto the board. SKIP_REASON marks it
     // as user-initiated so the catch below stays silent.
@@ -328,12 +414,71 @@ export default function ConnectionsOrganizer() {
       // signal is aborted (Skip, supersede, and timeout all set it), and
       // dropping the words here stops an already-settled request from yanking
       // the user onto the board they navigated away from.
-      if (!controller.signal.aborted) loadPuzzle(words);
+      //
+      // Stamp the board with the *response's* server-resolved date — never the
+      // client clock — and mark it chosen-explicitly only when a specific past
+      // date was requested (the chips); auto-load and the "Today's Puzzle"
+      // card pass no date and stay swappable when a new day arrives.
+      if (!controller.signal.aborted) {
+        const resolvedDate = typeof data?.date === "string" ? data.date : undefined;
+        if (compareFrom) {
+          // Legacy save: matching words mean the user was already on today's
+          // puzzle — keep their board (still in state from mount) and stamp
+          // its provenance; the persist effect writes the stamped store
+          // through. Different words take the standard swap-with-notice path.
+          const result = applyLegacyDaily(
+            { current: compareFrom, previous: previousBoard },
+            { words, date: resolvedDate },
+          );
+          setPreviousBoard(result.store.previous);
+          if (result.matched) {
+            setBoardMeta(metaOf(result.store.current));
+            setScreen("board");
+          } else {
+            loadPuzzle(result.store.current.tiles, metaOf(result.store.current));
+            setResumeNotice(result.store.previous);
+          }
+        } else if (swapFrom) {
+          // Atomic by construction: previous slot and current board change in
+          // one render batch, so the persist effect writes the whole swapped
+          // store at once — nothing was persisted before this point.
+          const next = applyDailySwap(
+            { current: swapFrom, previous: previousBoard },
+            { words, date: resolvedDate },
+          );
+          setPreviousBoard(next.previous);
+          loadPuzzle(next.current.tiles, metaOf(next.current));
+          setResumeNotice(next.previous);
+        } else {
+          loadPuzzle(words, {
+            date: resolvedDate,
+            source: "daily",
+            chosenExplicitly: Boolean(date),
+          });
+        }
+      }
     } catch {
       // A user-initiated cancel must not flash a self-inflicted error or pull
       // the user off the screen they chose. A timeout or real failure still
       // falls back to the menu.
       if (controller.signal.reason === SKIP_REASON) return;
+      if (swapFrom) {
+        // Stale-board launch (or banner retry) with no network: resume the
+        // old board untouched — it's still in state, and nothing new was
+        // persisted — under the "Today's puzzle is ready" banner, whose
+        // action retries this same load.
+        setTodayBanner(true);
+        setScreen("board");
+        return;
+      }
+      if (compareFrom) {
+        // Legacy-board launch with no network: resume untouched and
+        // unstamped, so the next launch retries the comparison. No banner —
+        // the words never arrived, so for all we know this IS today's board,
+        // and claiming a new puzzle is ready would nag wrongly.
+        setScreen("board");
+        return;
+      }
       setFetchError("Couldn't load that puzzle automatically — upload a screenshot or enter the words instead.");
       setScreen("menu");
     } finally {
@@ -347,7 +492,7 @@ export default function ConnectionsOrganizer() {
         setFetching(false);
       }
     }
-  }, [loadPuzzle]);
+  }, [loadPuzzle, previousBoard]);
 
   // Cancel an in-flight today-load so a slow request can't complete later and
   // hijack the screen the user has since chosen (Skip, Upload, Enter, Demo).
@@ -355,14 +500,84 @@ export default function ConnectionsOrganizer() {
     fetchAbortRef.current?.abort(SKIP_REASON);
   }, []);
 
-  // Auto-load today's words on first visit when there's no saved puzzle to
-  // resume. A saved puzzle takes precedence (resume on the board); the menu's
-  // "Today's Puzzle" card is the manual path in that case.
+  // Act on the launch decision exactly once. "resume" needs no fetch; the
+  // fetch actions all go through loadToday — the swap variant carrying the
+  // stale board so success can move it to the previous slot, the compare
+  // variant carrying the legacy board so the fetched words can settle it.
   useEffect(() => {
-    if (saved || autoLoadedRef.current) return;
+    if (launch === "resume" || autoLoadedRef.current) return;
     autoLoadedRef.current = true;
-    loadToday();
-  }, [saved, loadToday]);
+    const opts =
+      launch === "fetch-swap"
+        ? { swapFrom: saved.current }
+        : launch === "fetch-compare"
+          ? { compareFrom: saved.current }
+          : undefined;
+    loadToday(undefined, opts);
+  }, [launch, saved, loadToday]);
+
+  // Cover returns that never reload the page: a tab left open overnight
+  // refocuses with yesterday's board still mounted, and the launch decision
+  // never re-runs. On a visibility change to visible with the board on
+  // screen, pure ET-date math decides whether the board has gone stale; if
+  // so, raise the "Today's puzzle is ready" banner — its action is the only
+  // thing that fetches. Re-raising on every qualifying refocus is deliberate:
+  // a dismissal holds until the next hidden→visible transition. No timers —
+  // a tab that stays continuously visible across ET midnight gets nothing,
+  // because an actively playing user must not be nagged mid-session.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      if (screen !== "board" || !boardMeta) return;
+      if (isStaleDaily(boardMeta, todayET())) setTodayBanner(true);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [screen, boardMeta]);
+
+  // The resume notice's action: lossless swap back to the previous board.
+  // The re-entered board comes back marked chosen-explicitly (it won't be
+  // auto-swapped again) — unless it's today's daily, which stays swappable
+  // so tomorrow's launch still brings the new puzzle; today's board —
+  // including any sorting done since — moves to the previous slot, so
+  // swapping back the other way loses nothing.
+  const resumePrevious = useCallback(() => {
+    if (!previousBoard) return;
+    const next = swapBoards(
+      {
+        current: {
+          tiles,
+          lockedRows,
+          labels,
+          ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+        },
+        previous: previousBoard,
+      },
+      todayET(),
+    );
+    setPreviousBoard(next.previous);
+    setTiles(next.current.tiles);
+    setLockedRows(next.current.lockedRows);
+    setLabels(next.current.labels);
+    setBoardMeta(metaOf(next.current));
+    setSelected(null);
+    setResumeNotice(null);
+  }, [tiles, lockedRows, labels, boardMeta, previousBoard]);
+
+  // The banner's action: retry the today-load that failed (or was skipped) at
+  // launch, carrying the board on screen as swapFrom so success takes the
+  // exact same path as the launch swap — old board to the previous slot,
+  // today's board with the resume notice. Failure re-lands here, banner up.
+  const retryToday = useCallback(() => {
+    loadToday(undefined, {
+      swapFrom: {
+        tiles,
+        lockedRows,
+        labels,
+        ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+      },
+    });
+  }, [loadToday, tiles, lockedRows, labels, boardMeta]);
 
   const handleTap = useCallback((index) => {
     const row = Math.floor(index / 4);
@@ -449,7 +664,15 @@ export default function ConnectionsOrganizer() {
             onClick={() => {
               autoLoadedRef.current = true;
               cancelPendingFetch();
-              setScreen("menu");
+              // Skipping a stale-board load lands on the old board (it's a
+              // perfectly good one) under the "Today's puzzle is ready"
+              // banner; the menu is for launches with no board to show.
+              if (launch === "fetch-swap") {
+                setTodayBanner(true);
+                setScreen("board");
+              } else {
+                setScreen("menu");
+              }
             }}
           >
             Skip — start another way
@@ -525,6 +748,29 @@ export default function ConnectionsOrganizer() {
 
           {fetchError && <p style={styles.error}>{fetchError}</p>}
 
+          {previousBoard && (
+            <button
+              className="menu-card"
+              style={styles.menuCard}
+              onClick={() => {
+                cancelPendingFetch();
+                resumePrevious();
+                setScreen("board");
+              }}
+              aria-label="Resume your previous board"
+            >
+              <div style={styles.menuCardInner}>
+                <span style={styles.menuIcon} aria-hidden="true">↩</span>
+                <div>
+                  <span style={styles.menuLabel}>Resume previous board</span>
+                  <span style={styles.menuDesc}>
+                    {boardSummary(previousBoard, todayET())}
+                  </span>
+                </div>
+              </div>
+            </button>
+          )}
+
           <button
             className="menu-card"
             style={styles.menuCard}
@@ -542,7 +788,7 @@ export default function ConnectionsOrganizer() {
           <button
             className="menu-card"
             style={styles.menuCard}
-            onClick={() => { cancelPendingFetch(); setScreen("manual"); }}
+            onClick={() => { cancelPendingFetch(); setManualSource("manual"); setScreen("manual"); }}
             aria-label="Type or paste the sixteen puzzle words"
           >
             <div style={styles.menuCardInner}>
@@ -556,7 +802,10 @@ export default function ConnectionsOrganizer() {
           <button
             className="menu-card"
             style={styles.menuCard}
-            onClick={() => { cancelPendingFetch(); loadPuzzle(shuffled(DEMO_PUZZLE_WORDS)); }}
+            onClick={() => {
+              cancelPendingFetch();
+              loadPuzzle(shuffled(DEMO_PUZZLE_WORDS), { source: "demo", chosenExplicitly: false });
+            }}
             aria-label="Try a sample puzzle to see how the app works"
           >
             <div style={styles.menuCardInner}>
@@ -602,6 +851,7 @@ export default function ConnectionsOrganizer() {
         onCancel={() => setScreen("menu")}
         onWords={(text) => {
           setManualText(text);
+          setManualSource("ocr");
           setError(null);
           setScreen("manual");
         }}
@@ -629,7 +879,7 @@ export default function ConnectionsOrganizer() {
           <button className="btn btn-primary" style={styles.btnPrimary} onClick={() => {
             const parsed = parseTiles(manualText);
             if (parsed) {
-              loadPuzzle(parsed);
+              loadPuzzle(parsed, { source: manualSource, chosenExplicitly: false });
             } else {
               const count = manualText.split(/[,\n]+/).map(w => w.trim()).filter(Boolean).length;
               setError("Found " + count + " words — need exactly 16.");
@@ -641,15 +891,61 @@ export default function ConnectionsOrganizer() {
     );
   }
 
+  // Which day's puzzle the board holds — "Today", "Fri, Jun 5", or null for
+  // boards with no trusted date (OCR/manual/demo/legacy), which show nothing.
+  const boardDateText = dateLabel(boardMeta?.date, todayET());
+
   return (
     <div style={styles.container}>
       <div style={styles.boardHeader}>
         <button className="ghost-btn" style={styles.backBtn} onClick={() => setScreen("menu")}>← Menu</button>
+        {boardDateText && <span style={styles.boardDateLabel}>{boardDateText}</span>}
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn small-btn" style={styles.smallBtn} onClick={shuffleUnlocked}>Shuffle</button>
           <button className="btn small-btn" style={styles.smallBtn} onClick={resetBoard}>Reset</button>
         </div>
       </div>
+
+      {todayBanner && (
+        <div className="notice" style={styles.notice} role="status">
+          <span>Today's puzzle is ready —</span>
+          <button
+            className="ghost-btn"
+            style={styles.noticeAction}
+            onClick={retryToday}
+            disabled={fetching}
+          >
+            {fetching ? "Loading…" : "Play today's puzzle"}
+          </button>
+          <button
+            className="ghost-btn"
+            style={styles.noticeDismiss}
+            onClick={() => setTodayBanner(false)}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {resumeNotice && (
+        <div className="notice" style={styles.notice} role="status">
+          <span>Loaded today's puzzle.</span>
+          <button className="ghost-btn" style={styles.noticeAction} onClick={resumePrevious}>
+            ↩ {weekdayLong(resumeNotice.date)
+              ? `Resume ${weekdayLong(resumeNotice.date)}'s board`
+              : "Resume previous board"}
+          </button>
+          <button
+            className="ghost-btn"
+            style={styles.noticeDismiss}
+            onClick={() => setResumeNotice(null)}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div style={styles.grid}>
         {[0, 1, 2, 3].map(rowIdx => {
@@ -1315,6 +1611,52 @@ const styles = {
     alignItems: "center",
     marginBottom: 8,
     paddingTop: 4,
+  },
+  // Transient post-swap notice. connections-apm's "Today's puzzle is ready"
+  // banner should reuse this treatment (PRD: notice and banner share one
+  // visual language).
+  notice: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 2,
+    padding: "8px 12px",
+    marginBottom: 12,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderRadius: 12,
+    boxShadow: "var(--card-shadow)",
+    fontSize: 13,
+    color: "var(--text-soft)",
+  },
+  noticeAction: {
+    background: "none",
+    border: "none",
+    padding: "4px 6px",
+    fontSize: 13,
+    fontWeight: 700,
+    color: "var(--text)",
+    textDecoration: "underline",
+    cursor: "pointer",
+    fontFamily: "var(--font)",
+    whiteSpace: "nowrap",
+  },
+  noticeDismiss: {
+    background: "none",
+    border: "none",
+    padding: "4px 8px",
+    marginLeft: "auto",
+    fontSize: 13,
+    color: "var(--text-muted)",
+    cursor: "pointer",
+    fontFamily: "var(--font)",
+    lineHeight: 1,
+  },
+  boardDateLabel: {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: "var(--text-muted)",
+    whiteSpace: "nowrap",
   },
   backBtn: {
     background: "none",
