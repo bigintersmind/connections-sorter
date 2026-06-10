@@ -1,0 +1,217 @@
+// Unit tests for the saved-puzzle store (src/savedPuzzle.js).
+//
+// This module owns the persisted board schema — the two-slot {current,
+// previous} shape under the "connections-puzzle" localStorage key — and all
+// reasoning about it: legacy migration, malformed-data rejection, metadata
+// stamping, and the board-header date label. The contracts locked down here
+// are load-bearing for the returning-user landing feature (connections-41d):
+//
+//   1. A legacy {tiles, lockedRows, labels} blob parses as a current board
+//      with source "unknown" — that exact string is how later slices
+//      recognize a pre-metadata save. It must keep resuming unchanged.
+//   2. Malformed data (junk JSON, wrong tile count) parses to "no save",
+//      never a half-valid board.
+//   3. parse(serialize(store)) round-trips losslessly, so persisting and
+//      resuming can never drift apart.
+//   4. dateLabel is pure calendar math on ISO strings (caller supplies
+//      "today" in ET) — DST-safe, no hidden clock reads.
+//
+// Pure module, plain Node — no jsdom, mirroring worker/puzzle.test.js.
+
+import { describe, expect, it } from "vitest";
+import { dateLabel, makeBoard, parseStore, serializeStore } from "./savedPuzzle.js";
+
+// 16 distinct words, the way every real save has them: normalized uppercase.
+const TILES = Array.from({ length: 16 }, (_, i) => `WORD${i}`);
+
+// A pre-metadata save, exactly as the app wrote it before this module existed.
+const legacyBlob = (extra = {}) =>
+  JSON.stringify({
+    tiles: TILES,
+    lockedRows: [true, false, false, false],
+    labels: ["fruit", "", "", ""],
+    ...extra,
+  });
+
+describe("parseStore — legacy migration", () => {
+  it("parses a legacy flat blob as a current board with unknown provenance", () => {
+    const store = parseStore(legacyBlob());
+    expect(store).toEqual({
+      current: {
+        tiles: TILES,
+        lockedRows: [true, false, false, false],
+        labels: ["fruit", "", "", ""],
+        source: "unknown",
+        chosenExplicitly: false,
+      },
+      previous: null,
+    });
+    // No date key at all — downstream slices treat "no trusted date" as exempt.
+    expect("date" in store.current).toBe(false);
+  });
+
+  it("defaults missing or corrupt lockedRows/labels instead of dropping the save", () => {
+    // The old loadSaved was lenient here (`data.lockedRows || defaults`);
+    // tiles are the save, locks/labels are recoverable decoration.
+    const bare = parseStore(JSON.stringify({ tiles: TILES }));
+    expect(bare.current.lockedRows).toEqual([false, false, false, false]);
+    expect(bare.current.labels).toEqual(["", "", "", ""]);
+
+    const corrupt = parseStore(legacyBlob({ lockedRows: [true], labels: "x" }));
+    expect(corrupt.current.tiles).toEqual(TILES);
+    expect(corrupt.current.lockedRows).toEqual([false, false, false, false]);
+    expect(corrupt.current.labels).toEqual(["", "", "", ""]);
+  });
+});
+
+// A fully-stamped daily board in the new shape.
+const dailyBoard = (overrides = {}) => ({
+  tiles: TILES,
+  lockedRows: [false, true, false, false],
+  labels: ["", "trees", "", ""],
+  date: "2026-06-09",
+  source: "daily",
+  chosenExplicitly: false,
+  ...overrides,
+});
+
+describe("parseStore — two-slot shape", () => {
+  it("parses a current daily board with its metadata intact", () => {
+    const store = parseStore(JSON.stringify({ current: dailyBoard() }));
+    expect(store).toEqual({ current: dailyBoard(), previous: null });
+  });
+
+  it("parses both slots when a previous board exists", () => {
+    const prev = dailyBoard({ date: "2026-06-08", chosenExplicitly: true });
+    const store = parseStore(JSON.stringify({ current: dailyBoard(), previous: prev }));
+    expect(store.previous).toEqual(prev);
+  });
+
+  it("keeps the current board when only the previous slot is corrupt", () => {
+    const store = parseStore(
+      JSON.stringify({ current: dailyBoard(), previous: { tiles: ["JUST", "FOUR"] } }),
+    );
+    expect(store.current).toEqual(dailyBoard());
+    expect(store.previous).toBe(null);
+  });
+
+  it("treats a corrupt current board as no save even if previous is fine", () => {
+    expect(
+      parseStore(JSON.stringify({ current: { tiles: [] }, previous: dailyBoard() })),
+    ).toBe(null);
+  });
+
+  it("degrades unrecognized metadata softly instead of dropping the board", () => {
+    const store = parseStore(
+      JSON.stringify({
+        current: dailyBoard({ source: "telepathy", chosenExplicitly: "yes", date: "June 9" }),
+      }),
+    );
+    expect(store.current.source).toBe("unknown");
+    expect(store.current.chosenExplicitly).toBe(false);
+    expect("date" in store.current).toBe(false);
+  });
+});
+
+describe("parseStore — malformed data is no save", () => {
+  it("rejects missing, junk, and non-object payloads", () => {
+    expect(parseStore(null)).toBe(null);
+    expect(parseStore("")).toBe(null);
+    expect(parseStore("{not json")).toBe(null);
+    expect(parseStore("42")).toBe(null);
+    expect(parseStore('"tiles"')).toBe(null);
+    expect(parseStore("null")).toBe(null);
+  });
+
+  it("rejects a board with the wrong tile count or non-string tiles", () => {
+    expect(parseStore(JSON.stringify({ tiles: TILES.slice(0, 15) }))).toBe(null);
+    expect(parseStore(JSON.stringify({ tiles: "sixteen words" }))).toBe(null);
+    expect(parseStore(legacyBlob({ tiles: [...TILES.slice(0, 15), 16] }))).toBe(null);
+  });
+});
+
+describe("serializeStore", () => {
+  it("round-trips a two-slot store through parse losslessly", () => {
+    const store = {
+      current: dailyBoard(),
+      previous: dailyBoard({ date: "2026-06-08", chosenExplicitly: true }),
+    };
+    expect(parseStore(serializeStore(store))).toEqual(store);
+  });
+
+  it("round-trips a migrated legacy save into the two-slot shape", () => {
+    // The exact path an existing user's save takes on first launch after this
+    // ships: legacy blob → parse → persist effect serializes → next launch
+    // parses the new shape. Provenance must survive as "unknown".
+    const migrated = parseStore(legacyBlob());
+    const reloaded = parseStore(serializeStore(migrated));
+    expect(reloaded).toEqual(migrated);
+    expect(JSON.parse(serializeStore(migrated)).current.source).toBe("unknown");
+  });
+
+  it("serializes a store with no previous board", () => {
+    const store = parseStore(serializeStore({ current: dailyBoard(), previous: null }));
+    expect(store.previous).toBe(null);
+  });
+
+  it("refuses to serialize an invalid current board", () => {
+    expect(() => serializeStore({ current: { tiles: ["nope"] }, previous: null })).toThrow();
+  });
+});
+
+describe("makeBoard", () => {
+  it("builds a fresh daily board stamped with the server date", () => {
+    // The auto-load / "Today's Puzzle" card path: server-resolved date,
+    // not chosen explicitly.
+    expect(makeBoard(TILES, { date: "2026-06-09", source: "daily" })).toEqual({
+      tiles: TILES,
+      lockedRows: [false, false, false, false],
+      labels: ["", "", "", ""],
+      date: "2026-06-09",
+      source: "daily",
+      chosenExplicitly: false,
+    });
+  });
+
+  it("marks a past-date chip load as chosen explicitly", () => {
+    const board = makeBoard(TILES, {
+      date: "2026-06-05",
+      source: "daily",
+      chosenExplicitly: true,
+    });
+    expect(board.chosenExplicitly).toBe(true);
+  });
+
+  it("builds dateless boards for ocr/manual/demo sources", () => {
+    for (const source of ["ocr", "manual", "demo"]) {
+      const board = makeBoard(TILES, { source });
+      expect(board.source).toBe(source);
+      expect("date" in board).toBe(false);
+      expect(board.chosenExplicitly).toBe(false);
+    }
+  });
+});
+
+describe("dateLabel", () => {
+  it("returns null when the board has no date", () => {
+    expect(dateLabel(undefined, "2026-06-09")).toBe(null);
+    expect(dateLabel(null, "2026-06-09")).toBe(null);
+  });
+
+  it("labels a board dated today as 'Today'", () => {
+    expect(dateLabel("2026-06-09", "2026-06-09")).toBe("Today");
+  });
+
+  it("labels an older board with abbreviated weekday + date", () => {
+    // The PRD's own example: Friday June 5 2026 → "Fri, Jun 5".
+    expect(dateLabel("2026-06-05", "2026-06-09")).toBe("Fri, Jun 5");
+    // Connections launch day, a known Monday.
+    expect(dateLabel("2023-06-12", "2026-06-09")).toBe("Mon, Jun 12");
+  });
+
+  it("flips from 'Today' to a dated label across the ET midnight boundary", () => {
+    // Same board, one tick after ET midnight: todayISO advances a day and the
+    // label must immediately stop claiming "Today".
+    expect(dateLabel("2026-06-09", "2026-06-10")).toBe("Tue, Jun 9");
+  });
+});

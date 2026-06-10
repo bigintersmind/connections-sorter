@@ -5,6 +5,7 @@ import {
   hasClipboardReadSupport,
 } from "./clipboardImage.js";
 import { fitTileFont } from "./fitTileFont.js";
+import { dateLabel, parseStore, serializeStore } from "./savedPuzzle.js";
 
 const ROW_COLORS = [
   { name: "Yellow", bg: "#f9df6d", text: "#1a1a1a", glow: "rgba(249,223,109,0.6)" },
@@ -222,17 +223,13 @@ function reconstructTilesFromBboxes(words) {
   });
 }
 
+// Read the saved two-slot store ({ current, previous }) or null. All shape
+// knowledge — including migrating pre-metadata flat blobs — lives in
+// savedPuzzle.js; the try/catch here only covers localStorage itself being
+// unavailable (private mode, storage disabled).
 function loadSaved() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data.tiles) || data.tiles.length !== 16) return null;
-    return {
-      tiles: data.tiles,
-      lockedRows: data.lockedRows || [false, false, false, false],
-      labels: data.labels || ["", "", "", ""],
-    };
+    return parseStore(localStorage.getItem(STORAGE_KEY));
   } catch {
     return null;
   }
@@ -241,12 +238,30 @@ function loadSaved() {
 export default function ConnectionsOrganizer() {
   const saved = useState(loadSaved)[0];
   const [screen, setScreen] = useState(saved ? "board" : "loading");
-  const [tiles, setTiles] = useState(saved?.tiles ?? []);
+  const [tiles, setTiles] = useState(saved?.current.tiles ?? []);
   const [selected, setSelected] = useState(null);
-  const [lockedRows, setLockedRows] = useState(saved?.lockedRows ?? [false, false, false, false]);
+  const [lockedRows, setLockedRows] = useState(saved?.current.lockedRows ?? [false, false, false, false]);
   const [flashRow, setFlashRow] = useState(null);
-  const [labels, setLabels] = useState(saved?.labels ?? ["", "", "", ""]);
+  const [labels, setLabels] = useState(saved?.current.labels ?? ["", "", "", ""]);
+  // Provenance of the board on screen: { date?, source, chosenExplicitly }.
+  // Stamped by every load path and persisted alongside the play state so a
+  // returning visit can tell a stale daily board from a deliberate choice.
+  const [boardMeta, setBoardMeta] = useState(() =>
+    saved
+      ? {
+          date: saved.current.date,
+          source: saved.current.source,
+          chosenExplicitly: saved.current.chosenExplicitly,
+        }
+      : null,
+  );
+  // The previous-board slot rides along untouched this slice — nothing writes
+  // it yet, but a save that has one must not lose it on the next persist.
+  const previousRef = useRef(saved?.previous ?? null);
   const [manualText, setManualText] = useState("");
+  // Whether the manual screen was reached via OCR ("ocr") or typed directly
+  // ("manual") — decides the source stamped when its Load Puzzle commits.
+  const [manualSource, setManualSource] = useState("manual");
   const [error, setError] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
   const [fetching, setFetching] = useState(false);
@@ -277,21 +292,38 @@ export default function ConnectionsOrganizer() {
     return () => window.removeEventListener("resize", fitAll);
   }, [tiles, screen]);
 
-  // Persist on changes
+  // Persist on changes. Writing through serializeStore means a resumed legacy
+  // save is rewritten in the two-slot shape (with source "unknown") on its
+  // first persist — the migration is this effect doing its normal job.
   useEffect(() => {
     if (tiles.length === 16) {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ tiles, lockedRows, labels }));
+        localStorage.setItem(
+          STORAGE_KEY,
+          serializeStore({
+            current: {
+              tiles,
+              lockedRows,
+              labels,
+              ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+            },
+            previous: previousRef.current,
+          }),
+        );
       } catch {
         // storage unavailable — silent
       }
     }
-  }, [tiles, lockedRows, labels]);
+  }, [tiles, lockedRows, labels, boardMeta]);
 
-  const loadPuzzle = useCallback((words) => {
+  // Drop a fresh set of words onto the board. `meta` records where they came
+  // from (see boardMeta above); callers that can't know better default to
+  // unknown provenance.
+  const loadPuzzle = useCallback((words, meta) => {
     setTiles(words);
     setLockedRows([false, false, false, false]);
     setLabels(["", "", "", ""]);
+    setBoardMeta(meta ?? { source: "unknown", chosenExplicitly: false });
     setSelected(null);
     setError(null);
     setScreen("board");
@@ -328,7 +360,18 @@ export default function ConnectionsOrganizer() {
       // signal is aborted (Skip, supersede, and timeout all set it), and
       // dropping the words here stops an already-settled request from yanking
       // the user onto the board they navigated away from.
-      if (!controller.signal.aborted) loadPuzzle(words);
+      //
+      // Stamp the board with the *response's* server-resolved date — never the
+      // client clock — and mark it chosen-explicitly only when a specific past
+      // date was requested (the chips); auto-load and the "Today's Puzzle"
+      // card pass no date and stay swappable when a new day arrives.
+      if (!controller.signal.aborted) {
+        loadPuzzle(words, {
+          date: typeof data?.date === "string" ? data.date : undefined,
+          source: "daily",
+          chosenExplicitly: Boolean(date),
+        });
+      }
     } catch {
       // A user-initiated cancel must not flash a self-inflicted error or pull
       // the user off the screen they chose. A timeout or real failure still
@@ -542,7 +585,7 @@ export default function ConnectionsOrganizer() {
           <button
             className="menu-card"
             style={styles.menuCard}
-            onClick={() => { cancelPendingFetch(); setScreen("manual"); }}
+            onClick={() => { cancelPendingFetch(); setManualSource("manual"); setScreen("manual"); }}
             aria-label="Type or paste the sixteen puzzle words"
           >
             <div style={styles.menuCardInner}>
@@ -556,7 +599,10 @@ export default function ConnectionsOrganizer() {
           <button
             className="menu-card"
             style={styles.menuCard}
-            onClick={() => { cancelPendingFetch(); loadPuzzle(shuffled(DEMO_PUZZLE_WORDS)); }}
+            onClick={() => {
+              cancelPendingFetch();
+              loadPuzzle(shuffled(DEMO_PUZZLE_WORDS), { source: "demo", chosenExplicitly: false });
+            }}
             aria-label="Try a sample puzzle to see how the app works"
           >
             <div style={styles.menuCardInner}>
@@ -602,6 +648,7 @@ export default function ConnectionsOrganizer() {
         onCancel={() => setScreen("menu")}
         onWords={(text) => {
           setManualText(text);
+          setManualSource("ocr");
           setError(null);
           setScreen("manual");
         }}
@@ -629,7 +676,7 @@ export default function ConnectionsOrganizer() {
           <button className="btn btn-primary" style={styles.btnPrimary} onClick={() => {
             const parsed = parseTiles(manualText);
             if (parsed) {
-              loadPuzzle(parsed);
+              loadPuzzle(parsed, { source: manualSource, chosenExplicitly: false });
             } else {
               const count = manualText.split(/[,\n]+/).map(w => w.trim()).filter(Boolean).length;
               setError("Found " + count + " words — need exactly 16.");
@@ -641,10 +688,15 @@ export default function ConnectionsOrganizer() {
     );
   }
 
+  // Which day's puzzle the board holds — "Today", "Fri, Jun 5", or null for
+  // boards with no trusted date (OCR/manual/demo/legacy), which show nothing.
+  const boardDateText = dateLabel(boardMeta?.date, todayET());
+
   return (
     <div style={styles.container}>
       <div style={styles.boardHeader}>
         <button className="ghost-btn" style={styles.backBtn} onClick={() => setScreen("menu")}>← Menu</button>
+        {boardDateText && <span style={styles.boardDateLabel}>{boardDateText}</span>}
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn small-btn" style={styles.smallBtn} onClick={shuffleUnlocked}>Shuffle</button>
           <button className="btn small-btn" style={styles.smallBtn} onClick={resetBoard}>Reset</button>
@@ -1315,6 +1367,12 @@ const styles = {
     alignItems: "center",
     marginBottom: 8,
     paddingTop: 4,
+  },
+  boardDateLabel: {
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: "var(--text-muted)",
+    whiteSpace: "nowrap",
   },
   backBtn: {
     background: "none",
