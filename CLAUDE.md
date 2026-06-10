@@ -12,7 +12,7 @@ npm test         # Vitest (run once) — worker/puzzle.test.js + src/fitTileFont
 npm run preview  # Serve the built ./dist locally
 ```
 
-Vitest covers two pure modules — `worker/puzzle.js` (the puzzle fetch/transform + date-window logic, via an injectable `fetchImpl`) and `src/fitTileFont.js` (the tile shrink-to-fit loop, fed stub elements) — so no jsdom is needed. The worker handler, the Vite dev middleware, and `src/App.jsx`'s async load logic are **not** yet covered. Lint still runs over everything; `**/*.test.js` gets Vitest globals in `eslint.config.js`.
+Vitest covers three pure modules — `worker/puzzle.js` (the puzzle fetch/transform + date-window logic, via an injectable `fetchImpl`), `src/fitTileFont.js` (the tile shrink-to-fit loop, fed stub elements), and `src/savedPuzzle.js` (the persisted-board schema, launch decision, swap/stamp mechanics, and date labels) — so no jsdom is needed. The worker handler, the Vite dev middleware, and `src/App.jsx`'s async load logic are **not** yet covered. Lint still runs over everything; `**/*.test.js` gets Vitest globals in `eslint.config.js`.
 
 ## Architecture
 

@@ -7,6 +7,7 @@ import {
 import { fitTileFont } from "./fitTileFont.js";
 import {
   applyDailySwap,
+  applyLegacyDaily,
   dateLabel,
   decideLaunch,
   parseStore,
@@ -371,7 +372,10 @@ export default function ConnectionsOrganizer() {
   // board (passed as swapFrom) moves to the previous slot and the notice
   // offers it back; on failure we fall back to resuming it instead of the
   // menu, since there's a perfectly good board to show.
-  const loadToday = useCallback(async (date, { swapFrom } = {}) => {
+  // `compareFrom` is the legacy-save launch path: the fetch settles whether
+  // the pre-metadata board is already today's (word comparison) before
+  // deciding to stamp it in place or swap it out.
+  const loadToday = useCallback(async (date, { swapFrom, compareFrom } = {}) => {
     // Cancel any in-flight load (tapping another day, or Skip) so a stale
     // request can't later yank the user onto the board. SKIP_REASON marks it
     // as user-initiated so the catch below stays silent.
@@ -405,7 +409,24 @@ export default function ConnectionsOrganizer() {
       // card pass no date and stay swappable when a new day arrives.
       if (!controller.signal.aborted) {
         const resolvedDate = typeof data?.date === "string" ? data.date : undefined;
-        if (swapFrom) {
+        if (compareFrom) {
+          // Legacy save: matching words mean the user was already on today's
+          // puzzle — keep their board (still in state from mount) and stamp
+          // its provenance; the persist effect writes the stamped store
+          // through. Different words take the standard swap-with-notice path.
+          const result = applyLegacyDaily(
+            { current: compareFrom, previous: previousRef.current },
+            { words, date: resolvedDate },
+          );
+          previousRef.current = result.store.previous;
+          if (result.matched) {
+            setBoardMeta(metaOf(result.store.current));
+            setScreen("board");
+          } else {
+            loadPuzzle(result.store.current.tiles, metaOf(result.store.current));
+            setResumeNotice(result.store.previous);
+          }
+        } else if (swapFrom) {
           // Atomic by construction: previous slot and current board change in
           // one render batch, so the persist effect writes the whole swapped
           // store at once — nothing was persisted before this point.
@@ -429,10 +450,12 @@ export default function ConnectionsOrganizer() {
       // the user off the screen they chose. A timeout or real failure still
       // falls back to the menu.
       if (controller.signal.reason === SKIP_REASON) return;
-      if (swapFrom) {
-        // Stale-board launch with no network: resume the old board untouched
-        // — it's still in state, and nothing was persisted. The "Today's
-        // puzzle is ready" retry banner ships in connections-apm.
+      if (swapFrom || compareFrom) {
+        // Stale- or legacy-board launch with no network: resume the old board
+        // untouched — it's still in state, and nothing new was persisted. A
+        // legacy board stays unstamped, so the next launch retries the
+        // comparison. The "Today's puzzle is ready" retry banner ships in
+        // connections-apm.
         setScreen("board");
         return;
       }
@@ -457,13 +480,20 @@ export default function ConnectionsOrganizer() {
     fetchAbortRef.current?.abort(SKIP_REASON);
   }, []);
 
-  // Act on the launch decision exactly once. "resume" needs no fetch; both
-  // fetch actions go through loadToday, the swap variant carrying the stale
-  // board so success can move it to the previous slot.
+  // Act on the launch decision exactly once. "resume" needs no fetch; the
+  // fetch actions all go through loadToday — the swap variant carrying the
+  // stale board so success can move it to the previous slot, the compare
+  // variant carrying the legacy board so the fetched words can settle it.
   useEffect(() => {
     if (launch === "resume" || autoLoadedRef.current) return;
     autoLoadedRef.current = true;
-    loadToday(undefined, launch === "fetch-swap" ? { swapFrom: saved.current } : undefined);
+    const opts =
+      launch === "fetch-swap"
+        ? { swapFrom: saved.current }
+        : launch === "fetch-compare"
+          ? { compareFrom: saved.current }
+          : undefined;
+    loadToday(undefined, opts);
   }, [launch, saved, loadToday]);
 
   // The resume notice's action: lossless swap back to the previous board.

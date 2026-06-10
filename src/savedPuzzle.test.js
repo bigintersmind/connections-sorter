@@ -7,8 +7,9 @@
 // are load-bearing for the returning-user landing feature (connections-41d):
 //
 //   1. A legacy {tiles, lockedRows, labels} blob parses as a current board
-//      with source "unknown" — that exact string is how later slices
-//      recognize a pre-metadata save. It must keep resuming unchanged.
+//      with source "unknown" — that exact string is how launch recognizes a
+//      pre-metadata save, which it settles by fetching today's words and
+//      comparing (decideLaunch "fetch-compare" → applyLegacyDaily).
 //   2. Malformed data (junk JSON, wrong tile count) parses to "no save",
 //      never a half-valid board.
 //   3. parse(serialize(store)) round-trips losslessly, so persisting and
@@ -21,10 +22,12 @@
 import { describe, expect, it } from "vitest";
 import {
   applyDailySwap,
+  applyLegacyDaily,
   dateLabel,
   decideLaunch,
   makeBoard,
   parseStore,
+  sameWordSet,
   serializeStore,
   swapBoards,
 } from "./savedPuzzle.js";
@@ -232,10 +235,18 @@ describe("decideLaunch", () => {
     }
   });
 
-  it("resumes a legacy unknown-provenance board silently this slice", () => {
-    // connections-m80 upgrades this branch to a fetch-compare; until then
-    // legacy saves keep today's behavior exactly.
-    expect(decideLaunch(parseStore(legacyBlob()), TODAY)).toBe("resume");
+  it("fetch-compares a legacy unknown-provenance board against today's words", () => {
+    // The pre-metadata save can't prove what it is; the fetch settles it via
+    // applyLegacyDaily. This branch is what reaches the bouncing cohort —
+    // users whose save never gets rewritten because they leave before
+    // loading anything new.
+    expect(decideLaunch(parseStore(legacyBlob()), TODAY)).toBe("fetch-compare");
+  });
+
+  it("resumes a legacy board re-entered via resume — exempt, never re-compared", () => {
+    const { current } = parseStore(legacyBlob());
+    const resumed = { current: { ...current, chosenExplicitly: true }, previous: null };
+    expect(decideLaunch(resumed, TODAY)).toBe("resume");
   });
 
   it("resumes rather than swaps when staleness can't be proven", () => {
@@ -305,6 +316,101 @@ describe("applyDailySwap", () => {
       { words: FRESH_WORDS, date: "2026-06-09" },
     );
     expect(next.previous).toEqual(stale);
+  });
+});
+
+describe("sameWordSet", () => {
+  it("matches regardless of tile order — sorting tiles is what the app does", () => {
+    expect(sameWordSet(TILES, [...TILES].reverse())).toBe(true);
+    expect(sameWordSet(TILES, TILES)).toBe(true);
+  });
+
+  it("rejects a near-miss — 15 of 16 words matching is a different puzzle", () => {
+    expect(sameWordSet(TILES, [...TILES.slice(0, 15), "INTRUDER"])).toBe(false);
+  });
+
+  it("matches accented words across case and Unicode composition", () => {
+    // "EL NIÑO" saved with a precomposed Ñ must equal one built from
+    // N + combining tilde (NFD) — visually identical, different code points
+    // — and canonicalization makes case and stray whitespace irrelevant.
+    const composed = "EL NIÑO";
+    const decomposed = "EL NIN\u0303O"; // NFD, as an escape so no editor can re-compose it
+    const rest = TILES.slice(1);
+    expect(sameWordSet([composed, ...rest], [...rest, decomposed])).toBe(true);
+    expect(sameWordSet(["el niño", ...rest], [composed, ...rest])).toBe(true);
+    expect(sameWordSet([" EL  NIÑO ", ...rest], [composed, ...rest])).toBe(true);
+  });
+
+  it("counts duplicates — equal word sets with different multiplicity differ", () => {
+    const fourteen = TILES.slice(0, 14);
+    const twoTwins = ["TWIN", "TWIN", ...fourteen];
+    const twoWordZeros = ["TWIN", fourteen[0], ...fourteen];
+    expect(sameWordSet(twoTwins, twoWordZeros)).toBe(false);
+  });
+
+  it("rejects non-arrays and length mismatches outright", () => {
+    expect(sameWordSet(TILES, TILES.slice(0, 15))).toBe(false);
+    expect(sameWordSet(null, TILES)).toBe(false);
+    expect(sameWordSet(TILES, undefined)).toBe(false);
+  });
+});
+
+describe("applyLegacyDaily", () => {
+  const TODAY = "2026-06-09";
+
+  it("stamps a matching board in place — progress intact, now today's daily", () => {
+    // The bouncing-cohort happy path: their legacy board (locked row, label)
+    // holds today's words in whatever order they've sorted them into.
+    const saved = parseStore(legacyBlob());
+    const { matched, store } = applyLegacyDaily(saved, {
+      words: [...TILES].reverse(),
+      date: TODAY,
+    });
+    expect(matched).toBe(true);
+    expect(store.current).toEqual({ ...saved.current, date: TODAY, source: "daily" });
+    // Still not chosen-explicitly: tomorrow this board auto-swaps like any
+    // other auto-loaded daily.
+    expect(store.current.chosenExplicitly).toBe(false);
+    expect(store.previous).toBe(null);
+  });
+
+  it("after the stamp the board is today's: resumes today, swaps tomorrow", () => {
+    const { store } = applyLegacyDaily(parseStore(legacyBlob()), {
+      words: TILES,
+      date: TODAY,
+    });
+    const reloaded = parseStore(serializeStore(store));
+    expect(decideLaunch(reloaded, TODAY)).toBe("resume");
+    expect(decideLaunch(reloaded, "2026-06-10")).toBe("fetch-swap");
+  });
+
+  it("swaps a non-matching board out like any stale daily", () => {
+    const saved = parseStore(legacyBlob());
+    const todaysWords = Array.from({ length: 16 }, (_, i) => `NEW${i}`);
+    const { matched, store } = applyLegacyDaily(saved, { words: todaysWords, date: TODAY });
+    expect(matched).toBe(false);
+    expect(store.current).toEqual(makeBoard(todaysWords, { date: TODAY, source: "daily" }));
+    // The old board is recoverable via resume with its progress intact.
+    expect(store.previous).toEqual(saved.current);
+  });
+
+  it("leaves a matching board unstamped when the response carries no date", () => {
+    // A dateless "daily" board could never be proven stale by decideLaunch —
+    // stamping would freeze the user on it forever. Staying "unknown" means
+    // the next launch simply re-compares.
+    const saved = parseStore(legacyBlob());
+    const { matched, store } = applyLegacyDaily(saved, { words: TILES });
+    expect(matched).toBe(true);
+    expect(store.current).toEqual(saved.current);
+    expect(decideLaunch(store, TODAY)).toBe("fetch-compare");
+  });
+
+  it("fetch failure stamps nothing — the next launch retries the comparison", () => {
+    // The failure branch never reaches this function: the app resumes the
+    // board untouched. The retry contract at this level is that the
+    // unmodified store, persisted and reloaded, still decides fetch-compare.
+    const saved = parseStore(legacyBlob());
+    expect(decideLaunch(parseStore(serializeStore(saved)), TODAY)).toBe("fetch-compare");
   });
 });
 

@@ -49,22 +49,22 @@ export function isExempt(board) {
 
 // What the app should do at page load, given the parsed save (or null) and
 // today's ET date:
-//   "fetch-today" — no save; fetch and land on today's board (existing flow).
-//   "fetch-swap"  — current board is a non-exempt daily provably dated before
-//                   today: fetch today, move the old board to the previous
-//                   slot, offer resume.
-//   "resume"      — everything else, including legacy "unknown" saves (the
-//                   word-compare upgrade is connections-m80's) and boards
-//                   whose staleness can't be proven (no date, future date).
+//   "fetch-today"   — no save; fetch and land on today's board (existing flow).
+//   "fetch-swap"    — current board is a non-exempt daily provably dated before
+//                     today: fetch today, move the old board to the previous
+//                     slot, offer resume.
+//   "fetch-compare" — non-exempt pre-metadata save: fetch today and settle what
+//                     the board is by word comparison (applyLegacyDaily). Fetch
+//                     failure resumes it untouched and unstamped, so this
+//                     decision simply repeats next launch.
+//   "resume"        — everything else, including boards whose staleness can't
+//                     be proven (no date, future date).
 export function decideLaunch(saved, todayISO) {
   if (!saved) return "fetch-today";
   const { current } = saved;
-  if (
-    !isExempt(current) &&
-    current.source === "daily" &&
-    current.date &&
-    current.date < todayISO
-  ) {
+  if (isExempt(current)) return "resume";
+  if (current.source === "unknown") return "fetch-compare";
+  if (current.source === "daily" && current.date && current.date < todayISO) {
     return "fetch-swap";
   }
   return "resume";
@@ -79,6 +79,51 @@ export function applyDailySwap(saved, { words, date }) {
     current: makeBoard(words, { date, source: "daily", chosenExplicitly: false }),
     previous: saved.current,
   };
+}
+
+// Resolve a legacy (pre-metadata) save against the day's fetched puzzle — the
+// "fetch-compare" launch path. This is what reaches the bouncing cohort: their
+// save never gets rewritten because they leave before loading anything new, so
+// only a word comparison can tell whether their board is already today's.
+// Matching words mean it is: keep it in place, progress intact, and stamp
+// provenance (server date, source "daily", still swappable tomorrow).
+// Different words mean it's genuinely stale: the standard daily swap, old
+// board to the previous slot. Returns { matched, store } so the app knows
+// whether to keep the board on screen or load the new one with the notice.
+export function applyLegacyDaily(saved, { words, date }) {
+  if (!sameWordSet(saved.current.tiles, words)) {
+    return { matched: false, store: applyDailySwap(saved, { words, date }) };
+  }
+  // No trusted server date → don't stamp: a dateless "daily" board can never
+  // be proven stale by decideLaunch, which would freeze the user on this
+  // board forever. Staying "unknown" just re-compares on the next launch.
+  if (typeof date !== "string" || !ISO_DATE.test(date)) {
+    return { matched: true, store: { current: saved.current, previous: saved.previous ?? null } };
+  }
+  return {
+    matched: true,
+    store: {
+      current: { ...saved.current, date, source: "daily" },
+      previous: saved.previous ?? null,
+    },
+  };
+}
+
+// Order-insensitive comparison of two tile lists — the heart of the legacy
+// migration, where tile order means nothing (sorting tiles is what the app is
+// for). Words are canonicalized first: Unicode-composed (so "EL NIÑO" saved
+// as a precomposed Ñ matches one built from N + combining tilde), whitespace
+// collapsed, uppercased. Compared as sorted arrays, not Sets, so duplicate
+// words must match in count too.
+export function sameWordSet(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  const ca = a.map(canonicalWord).sort();
+  const cb = b.map(canonicalWord).sort();
+  return ca.every((word, i) => word === cb[i]);
+}
+
+function canonicalWord(word) {
+  return String(word).normalize("NFC").replace(/\s+/g, " ").trim().toUpperCase();
 }
 
 // Lossless swap of current ↔ previous. The re-entered board is marked
