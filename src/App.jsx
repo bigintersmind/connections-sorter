@@ -537,19 +537,24 @@ export default function ConnectionsOrganizer() {
 
   // The resume notice's action: lossless swap back to the previous board.
   // The re-entered board comes back marked chosen-explicitly (it won't be
-  // auto-swapped again); today's board — including any sorting done since —
-  // moves to the previous slot, so swapping back the other way loses nothing.
+  // auto-swapped again) — unless it's today's daily, which stays swappable
+  // so tomorrow's launch still brings the new puzzle; today's board —
+  // including any sorting done since — moves to the previous slot, so
+  // swapping back the other way loses nothing.
   const resumePrevious = useCallback(() => {
     if (!previousBoard) return;
-    const next = swapBoards({
-      current: {
-        tiles,
-        lockedRows,
-        labels,
-        ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+    const next = swapBoards(
+      {
+        current: {
+          tiles,
+          lockedRows,
+          labels,
+          ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+        },
+        previous: previousBoard,
       },
-      previous: previousBoard,
-    });
+      todayET(),
+    );
     setPreviousBoard(next.previous);
     setTiles(next.current.tiles);
     setLockedRows(next.current.lockedRows);

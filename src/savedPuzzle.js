@@ -144,10 +144,16 @@ function canonicalWord(word) {
 // chosen-explicitly — resuming is a deliberate choice, so it's exempt from
 // future auto-swaps — while the outgoing board keeps its own metadata
 // unchanged, making the swap fully reversible.
-export function swapBoards({ current, previous }) {
+//
+// Exception: re-entering the daily board dated `todayISO` is not a choice of
+// an old board, so it comes back *not* exempt. Exempting it would silently
+// resume it tomorrow morning — recreating the stale-board bounce for exactly
+// the players who used resume and then swapped back to today.
+export function swapBoards({ current, previous }, todayISO) {
   if (!previous) throw new TypeError("swapBoards: no previous board");
+  const isTodaysDaily = previous.source === "daily" && previous.date === todayISO;
   return {
-    current: { ...previous, chosenExplicitly: true },
+    current: { ...previous, chosenExplicitly: !isTodaysDaily },
     previous: current,
   };
 }

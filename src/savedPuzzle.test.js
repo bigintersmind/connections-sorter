@@ -313,7 +313,7 @@ describe("swapBoards", () => {
   });
 
   it("swaps losslessly and marks the re-entered board chosen-explicitly", () => {
-    const next = swapBoards({ current: todays, previous: yesterdays });
+    const next = swapBoards({ current: todays, previous: yesterdays }, "2026-06-09");
     // The resumed board comes back exactly as it was, now exempt from
     // future auto-swaps; the outgoing board's own metadata is untouched.
     expect(next.current).toEqual({ ...yesterdays, chosenExplicitly: true });
@@ -321,10 +321,30 @@ describe("swapBoards", () => {
   });
 
   it("is reversible — swapping back restores today's board and its progress", () => {
-    const there = swapBoards({ current: todays, previous: yesterdays });
-    const back = swapBoards(there);
-    expect(back.current).toEqual({ ...todays, chosenExplicitly: true });
+    const there = swapBoards({ current: todays, previous: yesterdays }, "2026-06-09");
+    const back = swapBoards(there, "2026-06-09");
+    // Today's board returns intact but NOT exempt: re-entering today's
+    // puzzle isn't a choice of an old board, and exempting it would freeze
+    // the player on it tomorrow — the stale-board bounce all over again.
+    expect(back.current).toEqual({ ...todays, chosenExplicitly: false });
     expect(back.previous).toEqual({ ...yesterdays, chosenExplicitly: true });
+  });
+
+  it("still auto-swaps tomorrow after a resume round-trip ends on today's board", () => {
+    const there = swapBoards({ current: todays, previous: yesterdays }, "2026-06-09");
+    const back = swapBoards(there, "2026-06-09");
+    expect(decideLaunch({ current: back.current, previous: back.previous }, "2026-06-10")).toBe(
+      "fetch-swap",
+    );
+  });
+
+  it("re-entering an old board dated today only by coincidence of source stays exempt", () => {
+    // A dateless board (ocr/manual/demo) re-entered via resume is marked
+    // chosen-explicitly like any other non-today board; its source already
+    // exempts it, so the flag is belt and suspenders.
+    const manual = makeBoard(TILES, { source: "manual" });
+    const next = swapBoards({ current: todays, previous: manual }, "2026-06-09");
+    expect(next.current.chosenExplicitly).toBe(true);
   });
 
   it("throws when there is no previous board to swap to", () => {
