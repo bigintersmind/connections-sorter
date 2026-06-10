@@ -19,7 +19,15 @@
 // Pure module, plain Node — no jsdom, mirroring worker/puzzle.test.js.
 
 import { describe, expect, it } from "vitest";
-import { dateLabel, makeBoard, parseStore, serializeStore } from "./savedPuzzle.js";
+import {
+  applyDailySwap,
+  dateLabel,
+  decideLaunch,
+  makeBoard,
+  parseStore,
+  serializeStore,
+  swapBoards,
+} from "./savedPuzzle.js";
 
 // 16 distinct words, the way every real save has them: normalized uppercase.
 const TILES = Array.from({ length: 16 }, (_, i) => `WORD${i}`);
@@ -189,6 +197,114 @@ describe("makeBoard", () => {
       expect("date" in board).toBe(false);
       expect(board.chosenExplicitly).toBe(false);
     }
+  });
+});
+
+describe("decideLaunch", () => {
+  const TODAY = "2026-06-09";
+
+  it("fetches today when there is no save", () => {
+    expect(decideLaunch(null, TODAY)).toBe("fetch-today");
+  });
+
+  it("swaps a stale auto-loaded daily board for today's puzzle", () => {
+    const saved = { current: dailyBoard({ date: "2026-06-08" }), previous: null };
+    expect(decideLaunch(saved, TODAY)).toBe("fetch-swap");
+  });
+
+  it("resumes silently when the daily board is already today's", () => {
+    const saved = { current: dailyBoard({ date: TODAY }), previous: null };
+    expect(decideLaunch(saved, TODAY)).toBe("resume");
+  });
+
+  it("never swaps out a stale board the player chose explicitly", () => {
+    const saved = {
+      current: dailyBoard({ date: "2026-06-05", chosenExplicitly: true }),
+      previous: null,
+    };
+    expect(decideLaunch(saved, TODAY)).toBe("resume");
+  });
+
+  it("resumes ocr/manual/demo boards silently — no trusted date, no nagging", () => {
+    for (const source of ["ocr", "manual", "demo"]) {
+      const saved = { current: makeBoard(TILES, { source }), previous: null };
+      expect(decideLaunch(saved, TODAY)).toBe("resume");
+    }
+  });
+
+  it("resumes a legacy unknown-provenance board silently this slice", () => {
+    // connections-m80 upgrades this branch to a fetch-compare; until then
+    // legacy saves keep today's behavior exactly.
+    expect(decideLaunch(parseStore(legacyBlob()), TODAY)).toBe("resume");
+  });
+
+  it("resumes rather than swaps when staleness can't be proven", () => {
+    // A daily board missing its date, or dated in the future (client clock
+    // skew), can't be shown to be stale — never yank those.
+    const dateless = { ...dailyBoard() };
+    delete dateless.date;
+    expect(decideLaunch({ current: dateless, previous: null }, TODAY)).toBe("resume");
+    const future = { current: dailyBoard({ date: "2026-06-10" }), previous: null };
+    expect(decideLaunch(future, TODAY)).toBe("resume");
+  });
+});
+
+describe("swapBoards", () => {
+  // Today's board (auto-loaded, some sorting done) on screen; yesterday's
+  // half-played board waiting in the previous slot.
+  const todays = dailyBoard({ date: "2026-06-09" });
+  const yesterdays = dailyBoard({
+    tiles: [...TILES].reverse(),
+    date: "2026-06-08",
+    lockedRows: [true, true, false, false],
+    labels: ["fish", "birds", "", ""],
+  });
+
+  it("swaps losslessly and marks the re-entered board chosen-explicitly", () => {
+    const next = swapBoards({ current: todays, previous: yesterdays });
+    // The resumed board comes back exactly as it was, now exempt from
+    // future auto-swaps; the outgoing board's own metadata is untouched.
+    expect(next.current).toEqual({ ...yesterdays, chosenExplicitly: true });
+    expect(next.previous).toEqual(todays);
+  });
+
+  it("is reversible — swapping back restores today's board and its progress", () => {
+    const there = swapBoards({ current: todays, previous: yesterdays });
+    const back = swapBoards(there);
+    expect(back.current).toEqual({ ...todays, chosenExplicitly: true });
+    expect(back.previous).toEqual({ ...yesterdays, chosenExplicitly: true });
+  });
+
+  it("throws when there is no previous board to swap to", () => {
+    expect(() => swapBoards({ current: todays, previous: null })).toThrow();
+  });
+});
+
+describe("applyDailySwap", () => {
+  const FRESH_WORDS = Array.from({ length: 16 }, (_, i) => `NEW${i}`);
+
+  it("moves the stale board to previous and makes the fetched puzzle current", () => {
+    const stale = dailyBoard({ date: "2026-06-08", lockedRows: [true, false, false, false] });
+    const next = applyDailySwap(
+      { current: stale, previous: null },
+      { words: FRESH_WORDS, date: "2026-06-09" },
+    );
+    // Today's board starts fresh and swappable; the old board is preserved
+    // exactly, locks and all.
+    expect(next.current).toEqual(
+      makeBoard(FRESH_WORDS, { date: "2026-06-09", source: "daily" }),
+    );
+    expect(next.previous).toEqual(stale);
+  });
+
+  it("keeps only one previous slot — an older previous board is dropped", () => {
+    const stale = dailyBoard({ date: "2026-06-08" });
+    const ancient = dailyBoard({ date: "2026-06-01" });
+    const next = applyDailySwap(
+      { current: stale, previous: ancient },
+      { words: FRESH_WORDS, date: "2026-06-09" },
+    );
+    expect(next.previous).toEqual(stale);
   });
 });
 

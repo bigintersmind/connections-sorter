@@ -35,6 +35,64 @@ export function parseStore(raw) {
   return { current, previous: null };
 }
 
+// The exemption rule shared by every auto-swap/banner slice: a board the
+// player chose explicitly (past-date chip, or re-entered via resume), or one
+// with no trusted date (ocr/manual/demo), is never swapped out or nagged.
+export function isExempt(board) {
+  return (
+    board.chosenExplicitly === true ||
+    board.source === "ocr" ||
+    board.source === "manual" ||
+    board.source === "demo"
+  );
+}
+
+// What the app should do at page load, given the parsed save (or null) and
+// today's ET date:
+//   "fetch-today" — no save; fetch and land on today's board (existing flow).
+//   "fetch-swap"  — current board is a non-exempt daily provably dated before
+//                   today: fetch today, move the old board to the previous
+//                   slot, offer resume.
+//   "resume"      — everything else, including legacy "unknown" saves (the
+//                   word-compare upgrade is connections-m80's) and boards
+//                   whose staleness can't be proven (no date, future date).
+export function decideLaunch(saved, todayISO) {
+  if (!saved) return "fetch-today";
+  const { current } = saved;
+  if (
+    !isExempt(current) &&
+    current.source === "daily" &&
+    current.date &&
+    current.date < todayISO
+  ) {
+    return "fetch-swap";
+  }
+  return "resume";
+}
+
+// Apply a successful daily fetch on the "fetch-swap" launch path: the stale
+// board moves to the previous slot (intact — this is what makes the resume
+// notice lossless) and the fetched puzzle becomes a fresh, swappable current.
+// One previous slot only, never an archive: any older previous is dropped.
+export function applyDailySwap(saved, { words, date }) {
+  return {
+    current: makeBoard(words, { date, source: "daily", chosenExplicitly: false }),
+    previous: saved.current,
+  };
+}
+
+// Lossless swap of current ↔ previous. The re-entered board is marked
+// chosen-explicitly — resuming is a deliberate choice, so it's exempt from
+// future auto-swaps — while the outgoing board keeps its own metadata
+// unchanged, making the swap fully reversible.
+export function swapBoards({ current, previous }) {
+  if (!previous) throw new TypeError("swapBoards: no previous board");
+  return {
+    current: { ...previous, chosenExplicitly: true },
+    previous: current,
+  };
+}
+
 // Build a fresh board (no locks, no labels) from 16 words plus provenance:
 // `date` (daily boards only — the Worker's server-resolved print date, never
 // the client clock), `source`, and `chosenExplicitly` (true only for
