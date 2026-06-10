@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev      # Vite dev server at http://localhost:5173 (predev mirrors Tesseract assets)
 npm run build    # Production build → ./dist (prebuild mirrors Tesseract assets)
 npm run lint     # ESLint over .js/.jsx
-npm test         # Vitest (run once) — worker/puzzle.test.js + src/fitTileFont.test.js
+npm test         # Vitest (run once) — the pure-module suites listed below
 npm run preview  # Serve the built ./dist locally
 ```
 
@@ -16,7 +16,7 @@ Vitest covers three pure modules — `worker/puzzle.js` (the puzzle fetch/transf
 
 ## Architecture
 
-Single-page React 19 + Vite app. Most logic lives in `src/App.jsx` — the root component, the upload screen, the OCR pipeline, and an inline `styles` object. Pure, framework-free helpers are extracted so they can be unit-tested without a DOM: `src/clipboardImage.js` (clipboard/paste MIME policy) and `src/fitTileFont.js` (tile shrink-to-fit). There is no router, no state library, no CSS framework. State persists to `localStorage` under `connections-puzzle`.
+Single-page React 19 + Vite app. Most logic lives in `src/App.jsx` — the root component, the upload screen, the OCR pipeline, and an inline `styles` object. Pure, framework-free helpers are extracted so they can be unit-tested without a DOM: `src/clipboardImage.js` (clipboard/paste MIME policy), `src/fitTileFont.js` (tile shrink-to-fit), and `src/savedPuzzle.js` (the saved-board store, launch decision, and date labels). There is no router, no state library, no CSS framework. State persists to `localStorage` under `connections-puzzle`.
 
 ### Theming (light/dark — the inline-styles + CSS-vars split)
 

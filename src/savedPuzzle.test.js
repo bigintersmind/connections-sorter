@@ -32,6 +32,8 @@ import {
   sameWordSet,
   serializeStore,
   swapBoards,
+  todayET,
+  weekdayLong,
 } from "./savedPuzzle.js";
 
 // 16 distinct words, the way every real save has them: normalized uppercase.
@@ -338,7 +340,7 @@ describe("swapBoards", () => {
     );
   });
 
-  it("re-entering an old board dated today only by coincidence of source stays exempt", () => {
+  it("re-entering a dateless board still marks it chosen-explicitly", () => {
     // A dateless board (ocr/manual/demo) re-entered via resume is marked
     // chosen-explicitly like any other non-today board; its source already
     // exempts it, so the flag is belt and suspenders.
@@ -466,12 +468,22 @@ describe("applyLegacyDaily", () => {
     expect(decideLaunch(store, TODAY)).toBe("fetch-compare");
   });
 
-  it("fetch failure stamps nothing — the next launch retries the comparison", () => {
-    // The failure branch never reaches this function: the app resumes the
-    // board untouched. The retry contract at this level is that the
-    // unmodified store, persisted and reloaded, still decides fetch-compare.
+  it("an untouched store re-decides fetch-compare after a persist round-trip", () => {
+    // The fetch-failure retry contract. The failure branch never reaches
+    // this function — the app resumes the board untouched — so what must
+    // hold is that the unmodified store, persisted and reloaded, still
+    // decides fetch-compare.
     const saved = parseStore(legacyBlob());
     expect(decideLaunch(parseStore(serializeStore(saved)), TODAY)).toBe("fetch-compare");
+  });
+
+  it("leaves a matching board unstamped when the response date isn't ISO", () => {
+    // Same freeze-forever guard as the dateless case, for a malformed date.
+    const saved = parseStore(legacyBlob());
+    const { matched, store } = applyLegacyDaily(saved, { words: TILES, date: "June 9" });
+    expect(matched).toBe(true);
+    expect("date" in store.current).toBe(false);
+    expect(decideLaunch(store, TODAY)).toBe("fetch-compare");
   });
 });
 
@@ -497,6 +509,45 @@ describe("dateLabel", () => {
     // label must immediately stop claiming "Today".
     expect(dateLabel("2026-06-09", "2026-06-10")).toBe("Tue, Jun 9");
   });
+
+  it("returns null rather than throwing for a malformed date string", () => {
+    // In-memory boardMeta can carry a date the persist normalizer never saw;
+    // Intl.format throws a RangeError on an invalid Date, which here would be
+    // an uncaught render crash. Total beats throwing.
+    expect(dateLabel("garbage", "2026-06-09")).toBe(null);
+    expect(dateLabel("June 9", "2026-06-09")).toBe(null);
+    expect(dateLabel(42, "2026-06-09")).toBe(null);
+  });
+});
+
+describe("weekdayLong", () => {
+  it("names the weekday for the resume notice, DST-safe", () => {
+    // Friday June 5 2026 — same calendar math as dateLabel, so a local-zone
+    // regression would shift this for any user west of UTC.
+    expect(weekdayLong("2026-06-05")).toBe("Friday");
+    expect(weekdayLong("2023-06-12")).toBe("Monday"); // Connections launch day
+  });
+
+  it("returns null for missing or malformed dates — the notice falls back to generic copy", () => {
+    expect(weekdayLong(undefined)).toBe(null);
+    expect(weekdayLong(null)).toBe(null);
+    expect(weekdayLong("garbage")).toBe(null);
+  });
+});
+
+describe("todayET", () => {
+  // Mirrors worker/puzzle.test.js — the two implementations must agree, or
+  // the client could decide a board is stale while the worker still serves
+  // yesterday's puzzle (or vice versa).
+  it("rolls over at midnight Eastern, not UTC, during EDT", () => {
+    expect(todayET(new Date("2026-05-28T03:00:00Z"))).toBe("2026-05-27"); // 23:00 EDT
+    expect(todayET(new Date("2026-05-28T05:00:00Z"))).toBe("2026-05-28"); // 01:00 EDT
+  });
+
+  it("rolls over at midnight Eastern, not UTC, during EST", () => {
+    expect(todayET(new Date("2026-01-15T04:00:00Z"))).toBe("2026-01-14"); // 23:00 EST
+    expect(todayET(new Date("2026-01-15T06:00:00Z"))).toBe("2026-01-15"); // 01:00 EST
+  });
 });
 
 describe("boardSummary", () => {
@@ -514,6 +565,12 @@ describe("boardSummary", () => {
   it("shows just the date when nothing is locked", () => {
     const board = dailyBoard({ lockedRows: [false, false, false, false] });
     expect(boardSummary(board, "2026-06-10")).toBe("Tue, Jun 9");
+  });
+
+  it("treats a malformed date like no date instead of throwing", () => {
+    expect(boardSummary({ ...dailyBoard(), date: "garbage" }, "2026-06-09")).toBe(
+      "1 group locked",
+    );
   });
 
   it("never renders an empty line — progress alone, or a generic nudge", () => {

@@ -7,10 +7,11 @@
 // a DOM, like worker/puzzle.js; the app component stays a thin wiring layer.
 
 // Parse the raw localStorage string into { current, previous } — or null for
-// anything unusable (no save, junk JSON, malformed boards), exactly like the
-// old loadSaved treated bad data. A legacy flat { tiles, lockedRows, labels }
-// blob becomes a current board with source "unknown" — that exact string is
-// the contract later slices use to recognize a pre-metadata save.
+// anything unusable (no save, junk JSON, malformed boards) — the same
+// null-for-bad-data posture as the old loadSaved, tightened to also reject
+// non-string tiles. A legacy flat { tiles, lockedRows, labels } blob becomes
+// a current board with source "unknown" — that exact string is how
+// decideLaunch's "fetch-compare" branch recognizes a pre-metadata save.
 export function parseStore(raw) {
   if (!raw) return null;
   let data;
@@ -143,7 +144,7 @@ function canonicalWord(word) {
 // Lossless swap of current ↔ previous. The re-entered board is marked
 // chosen-explicitly — resuming is a deliberate choice, so it's exempt from
 // future auto-swaps — while the outgoing board keeps its own metadata
-// unchanged, making the swap fully reversible.
+// unchanged, so swapping back loses no play state.
 //
 // Exception: re-entering the daily board dated `todayISO` is not a choice of
 // an old board, so it comes back *not* exempt. Exempting it would silently
@@ -160,8 +161,9 @@ export function swapBoards({ current, previous }, todayISO) {
 
 // Build a fresh board (no locks, no labels) from 16 words plus provenance:
 // `date` (daily boards only — the Worker's server-resolved print date, never
-// the client clock), `source`, and `chosenExplicitly` (true only for
-// past-date chip loads; auto-load and the "Today's Puzzle" card pass false).
+// the client clock), `source`, and `chosenExplicitly` (true means the player
+// deliberately picked this board — in the app, only the past-date chips set
+// it at load time, and they stamp their meta inline rather than through here).
 export function makeBoard(tiles, { date, source, chosenExplicitly = false }) {
   const board = normalizeBoard({ tiles, date, source, chosenExplicitly });
   if (!board) throw new TypeError("makeBoard: invalid tiles");
@@ -233,9 +235,12 @@ export function boardSummary(board, todayISO) {
 }
 
 // Board-header label for a dated board. `todayISO` is supplied by the caller
-// (todayET() in the app) so this stays pure calendar math — no clock reads.
+// (todayET()) so this stays pure calendar math — no clock reads. Total: a
+// missing or non-ISO date returns null rather than letting Intl throw a
+// RangeError mid-render (boardMeta can hold an in-memory date the persist
+// normalizer never saw).
 export function dateLabel(dateISO, todayISO) {
-  if (!dateISO) return null;
+  if (typeof dateISO !== "string" || !ISO_DATE.test(dateISO)) return null;
   if (dateISO === todayISO) return "Today";
   // Format from the ISO parts in UTC — never `new Date(dateISO)` through the
   // local zone, which would shift the calendar day for some users (the same
@@ -247,4 +252,26 @@ export function dateLabel(dateISO, todayISO) {
     day: "numeric",
     timeZone: "UTC",
   }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+// Full weekday for the resume notice ("Resume Monday's board"), formatted
+// from the ISO parts in UTC like dateLabel — and total the same way: null
+// for a missing or malformed date, so the notice falls back to its generic
+// "Resume previous board" copy instead of crashing.
+export function weekdayLong(dateISO) {
+  if (typeof dateISO !== "string" || !ISO_DATE.test(dateISO)) return null;
+  const [y, m, d] = dateISO.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(
+    new Date(Date.UTC(y, m - 1, d)),
+  );
+}
+
+// Today's date (YYYY-MM-DD) in America/New_York — the module's single clock
+// seam, injectable for tests. Mirrors worker/puzzle.js's todayET: the puzzle
+// day rolls over at midnight Eastern, and this value feeds decideLaunch,
+// isStaleDaily, and swapBoards, so a wrong zone here means a wrong puzzle,
+// not just a wrong label.
+export function todayET(now = new Date()) {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(now);
 }

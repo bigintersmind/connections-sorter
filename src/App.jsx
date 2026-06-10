@@ -15,6 +15,8 @@ import {
   parseStore,
   serializeStore,
   swapBoards,
+  todayET,
+  weekdayLong,
 } from "./savedPuzzle.js";
 
 const ROW_COLORS = [
@@ -51,16 +53,14 @@ const OFFICIAL_GAME_URL = "https://www.nytimes.com/games/connections";
 // so it can be told apart from a timeout/failure abort.
 const SKIP_REASON = "user-skip";
 
-// Daily-puzzle date helpers. These build the chip labels client-side; the
+// Recent-date chip helpers. These build the chip labels client-side; the
 // Worker (worker/puzzle.js) is the source of truth for which dates are
-// actually loadable, so a stale clock here just shows a wrong label, never a
-// wrong puzzle.
+// actually loadable. todayET itself lives in savedPuzzle.js (tested, DST
+// boundaries pinned) because it also drives the launch decision, the refocus
+// staleness check, and swapBoards — a wrong zone there means a wrong puzzle,
+// not just a wrong label.
 const PUZZLE_LAUNCH_DATE = "2023-06-12";
 const RECENT_WINDOW_DAYS = 6; // today + this many prior days
-
-function todayET() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-}
 
 // Calendar arithmetic on a YYYY-MM-DD string, DST-safe (operates in UTC).
 function addDays(isoDate, delta) {
@@ -237,9 +237,24 @@ function reconstructTilesFromBboxes(words) {
 // knowledge — including migrating pre-metadata flat blobs — lives in
 // savedPuzzle.js; the try/catch here only covers localStorage itself being
 // unavailable (private mode, storage disabled).
+//
+// "Save existed but didn't parse" is not the same as "no save": treating it
+// as no-save is the designed recovery, but the first successful persist then
+// overwrites the main key, making "my board vanished" undebuggable. Keep the
+// evidence under a side key and leave a console trace.
 function loadSaved() {
   try {
-    return parseStore(localStorage.getItem(STORAGE_KEY));
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const store = parseStore(raw);
+    if (raw != null && !store) {
+      console.warn(`connections: discarding unreadable save (${raw.length} chars), kept at ${STORAGE_KEY}.bad`);
+      try {
+        localStorage.setItem(`${STORAGE_KEY}.bad`, raw);
+      } catch {
+        // best effort — the warning above still fired
+      }
+    }
+    return store;
   } catch {
     return null;
   }
@@ -254,27 +269,18 @@ function metaOf(board) {
   };
 }
 
-// Full weekday for the resume notice ("Resume Monday's board"), formatted from
-// the ISO parts in UTC like every other date label here.
-function weekdayLong(dateISO) {
-  if (!dateISO) return null;
-  const [y, m, d] = dateISO.split("-").map(Number);
-  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(
-    new Date(Date.UTC(y, m - 1, d)),
-  );
-}
-
 export default function ConnectionsOrganizer() {
   // The save and the launch decision are taken once, at mount — a re-render
   // after ET midnight must not re-decide and yank a board mid-play (refocus
-  // handling is connections-7a4's slice).
+  // is handled separately by the visibilitychange effect below).
   const [{ saved, launch }] = useState(() => {
     const stored = loadSaved();
     return { saved: stored, launch: decideLaunch(stored, todayET()) };
   });
-  // "resume" lands straight on the board; "fetch-today" and "fetch-swap" both
-  // go through the loading screen (state below still holds the old board on
-  // the swap path, so a failed fetch can fall back to it untouched).
+  // "resume" lands straight on the board; every fetch decision (fetch-today,
+  // fetch-swap, fetch-compare) goes through the loading screen (state below
+  // still holds the old board on the swap/compare paths, so a failed fetch
+  // can fall back to it untouched).
   const [screen, setScreen] = useState(launch === "resume" ? "board" : "loading");
   const [tiles, setTiles] = useState(saved?.current.tiles ?? []);
   const [selected, setSelected] = useState(null);
@@ -289,12 +295,13 @@ export default function ConnectionsOrganizer() {
   // the previous slot). React state only — never persisted — so it shows at
   // swap time and is gone on the next reload, by design.
   const [resumeNotice, setResumeNotice] = useState(null);
-  // "Today's puzzle is ready" banner: shown when the stale-board launch path
-  // couldn't deliver today's puzzle (fetch failure, or the user hit Skip) and
-  // the old board is on screen instead. Its action retries the swap. Same
-  // transient React-state-only lifetime as the notice; structurally it can
-  // only appear on non-exempt stale dailies, because only those launch with
-  // a swapFrom.
+  // "Today's puzzle is ready" banner: shown when today's puzzle exists but
+  // isn't on screen — a stale-board launch whose fetch failed, the user hit
+  // Skip, or a refocus across ET midnight (the visibilitychange effect
+  // below). Its action retries the swap. Same transient React-state-only
+  // lifetime as the notice; all three paths gate on a non-exempt stale
+  // daily — the launch paths via decideLaunch, the refocus path via
+  // isStaleDaily.
   const [todayBanner, setTodayBanner] = useState(false);
   // The previous-board slot. React state (not a ref) because the menu's
   // "Resume previous board" card renders from it; persisted alongside the
@@ -338,23 +345,26 @@ export default function ConnectionsOrganizer() {
   // save is rewritten in the two-slot shape (with source "unknown") on its
   // first persist — the migration is this effect doing its normal job.
   useEffect(() => {
-    if (tiles.length === 16) {
-      try {
-        localStorage.setItem(
-          STORAGE_KEY,
-          serializeStore({
-            current: {
-              tiles,
-              lockedRows,
-              labels,
-              ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
-            },
-            previous: previousBoard,
-          }),
-        );
-      } catch {
-        // storage unavailable — silent
-      }
+    if (tiles.length !== 16) return;
+    // Serialize outside the try: serializeStore throwing means an invalid
+    // board reached React state — a programming error that must surface
+    // loudly, not vanish into the storage-unavailable catch below.
+    const payload = serializeStore({
+      current: {
+        tiles,
+        lockedRows,
+        labels,
+        ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+      },
+      previous: previousBoard,
+    });
+    try {
+      localStorage.setItem(STORAGE_KEY, payload);
+    } catch (err) {
+      // Storage unavailable or full (private mode, quota): the session keeps
+      // working but nothing survives a reload — leave the only diagnostic
+      // trace a "my board vanished" report will ever have.
+      console.warn("connections: couldn't persist the board:", err?.name ?? err);
     }
   }, [tiles, lockedRows, labels, boardMeta, previousBoard]);
 
@@ -377,13 +387,14 @@ export default function ConnectionsOrganizer() {
   }, []);
 
   // Fetch the day's 16 words from our same-origin Worker proxy (which strips
-  // the answer groupings server-side) and drop them onto the board. Any
-  // failure or timeout falls back to the menu so OCR/manual stay available —
-  // it never blocks the user with a blank board or hard error.
-  // `swapFrom` is set only by the stale-board launch path: on success the old
-  // board (passed as swapFrom) moves to the previous slot and the notice
-  // offers it back; on failure we fall back to resuming it instead of the
-  // menu, since there's a perfectly good board to show.
+  // the answer groupings server-side) and drop them onto the board. On a
+  // plain load, any failure or timeout falls back to the menu so OCR/manual
+  // stay available — it never blocks the user with a blank board or hard
+  // error; the swap/compare variants fall back to the board instead.
+  // `swapFrom` is set by the stale-board launch path and the banner's retry:
+  // on success the old board (passed as swapFrom) moves to the previous slot
+  // and the notice offers it back; on failure we fall back to resuming it
+  // instead of the menu, since there's a perfectly good board to show.
   // `compareFrom` is the legacy-save launch path: the fetch settles whether
   // the pre-metadata board is already today's (word comparison) before
   // deciding to stamp it in place or swap it out.
@@ -402,8 +413,17 @@ export default function ConnectionsOrganizer() {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) throw new Error("fetch_failed");
       const data = await res.json();
-      const words = Array.isArray(data?.words) ? data.words : null;
-      if (!words || words.length !== 16) throw new Error("bad_data");
+      // Shape AND element type: a non-string tile would either crash
+      // makeBoard on the swap path or poison state so serializeStore throws
+      // on every persist — reject it here as bad_data like any other
+      // malformed response.
+      const words =
+        Array.isArray(data?.words) &&
+        data.words.length === 16 &&
+        data.words.every((w) => typeof w === "string")
+          ? data.words
+          : null;
+      if (!words) throw new Error("bad_data");
       // The Worker already returns clean, uppercased words; pass them through
       // verbatim so accented tiles (e.g. "EL NIÑO") aren't mangled by the
       // OCR/manual-entry normalizer.
@@ -420,7 +440,14 @@ export default function ConnectionsOrganizer() {
       // date was requested (the chips); auto-load and the "Today's Puzzle"
       // card pass no date and stay swappable when a new day arrives.
       if (!controller.signal.aborted) {
-        const resolvedDate = typeof data?.date === "string" ? data.date : undefined;
+        // Validate at the trust boundary: the swap/compare paths normalize
+        // the date downstream, but the plain path stamps it straight into
+        // in-memory boardMeta, where a non-ISO string would survive until
+        // render (the persist normalizer only cleans the written copy).
+        const resolvedDate =
+          typeof data?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.date)
+            ? data.date
+            : undefined;
         if (compareFrom) {
           // Legacy save: matching words mean the user was already on today's
           // puzzle — keep their board (still in state from mount) and stamp
@@ -441,7 +468,7 @@ export default function ConnectionsOrganizer() {
         } else if (swapFrom) {
           // Atomic by construction: previous slot and current board change in
           // one render batch, so the persist effect writes the whole swapped
-          // store at once — nothing was persisted before this point.
+          // store at once — a partially swapped store is never persisted.
           const next = applyDailySwap(
             { current: swapFrom, previous: previousBoard },
             { words, date: resolvedDate },
@@ -457,11 +484,17 @@ export default function ConnectionsOrganizer() {
           });
         }
       }
-    } catch {
+    } catch (err) {
       // A user-initiated cancel must not flash a self-inflicted error or pull
       // the user off the screen they chose. A timeout or real failure still
       // falls back to the menu.
       if (controller.signal.reason === SKIP_REASON) return;
+      // Every non-skip failure gets a console trace. The try block contains
+      // commit logic too (applyDailySwap/applyLegacyDaily/loadPuzzle), so
+      // this catch can also see a programming error — without a log it would
+      // masquerade as a network failure and the fallbacks below would loop
+      // undiagnosably (the banner retries this same function).
+      console.error("connections: today-load failed:", controller.signal.aborted ? controller.signal.reason : err);
       if (swapFrom) {
         // Stale-board launch (or banner retry) with no network: resume the
         // old board untouched — it's still in state, and nothing new was
@@ -666,7 +699,13 @@ export default function ConnectionsOrganizer() {
               cancelPendingFetch();
               // Skipping a stale-board load lands on the old board (it's a
               // perfectly good one) under the "Today's puzzle is ready"
-              // banner; the menu is for launches with no board to show.
+              // banner. Everything else — including fetch-compare, where a
+              // board sits in state but its identity is unsettled, so
+              // neither the banner's claim nor a silent resume would be
+              // honest — goes to the menu. Skipping a compare launch does
+              // strand that board until reload (legacy saves have no
+              // previous slot, so no resume card): connections-5ei tracks
+              // whether that's the right call.
               if (launch === "fetch-swap") {
                 setTodayBanner(true);
                 setScreen("board");
@@ -1612,9 +1651,8 @@ const styles = {
     marginBottom: 8,
     paddingTop: 4,
   },
-  // Transient post-swap notice. connections-apm's "Today's puzzle is ready"
-  // banner should reuse this treatment (PRD: notice and banner share one
-  // visual language).
+  // Shared by the transient post-swap resume notice and the "Today's puzzle
+  // is ready" banner — one visual language, per the PRD.
   notice: {
     display: "flex",
     alignItems: "center",

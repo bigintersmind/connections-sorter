@@ -28,7 +28,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # A non-UTC zone so the UTC-formatting date-label tests would actually
+      # fail on a local-zone regression (in UTC CI the bug is invisible).
       - run: npm test
+        env:
+          TZ: America/New_York
       # `build` runs prebuild, which mirrors Tesseract assets and downloads the
       # language data over the network (idempotent). Catches build breakage too.
       - run: npm run build

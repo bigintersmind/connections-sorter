@@ -40,6 +40,8 @@ Use `/tdd` for the implementation. The acceptance criteria from the agent brief 
 
 If the ticket's category is `bug`, use `/diagnose` to build a deterministic feedback loop and find the root cause before touching code. The brief's "Current behavior" section is your reproduction starting point.
 
+Before closing out, grep the codebase for comments that name your ticket ID or describe your slice as future work ("X is ticket Y's slice", "Z should reuse this") and rewrite them in present tense. Comments written by earlier slices describing yours go stale the moment you land — and nobody else will ever be looking at exactly this seam again.
+
 # Feedback loops
 
 Before committing, run the project's verification commands. The full list lives in `CLAUDE.md`; for this project that means at minimum:
