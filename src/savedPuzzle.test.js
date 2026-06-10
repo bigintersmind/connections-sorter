@@ -26,6 +26,7 @@ import {
   boardSummary,
   dateLabel,
   decideLaunch,
+  isStaleDaily,
   makeBoard,
   parseStore,
   sameWordSet,
@@ -258,6 +259,45 @@ describe("decideLaunch", () => {
     expect(decideLaunch({ current: dateless, previous: null }, TODAY)).toBe("resume");
     const future = { current: dailyBoard({ date: "2026-06-10" }), previous: null };
     expect(decideLaunch(future, TODAY)).toBe("resume");
+  });
+});
+
+describe("isStaleDaily", () => {
+  // The predicate behind both the launch fetch-swap and the refocus banner
+  // (a tab left open overnight): a non-exempt daily provably dated before
+  // today is the only board the app ever offers to replace.
+  const TODAY = "2026-06-09";
+
+  it("flags a non-exempt daily board dated before today", () => {
+    expect(isStaleDaily(dailyBoard({ date: "2026-06-08" }), TODAY)).toBe(true);
+  });
+
+  it("does not flag today's board, nor across-midnight until the date advances", () => {
+    const board = dailyBoard({ date: TODAY });
+    expect(isStaleDaily(board, TODAY)).toBe(false);
+    // The same board after ET midnight — the refocus check goes live.
+    expect(isStaleDaily(board, "2026-06-10")).toBe(true);
+  });
+
+  it("never flags exempt boards — chip-chosen, resumed, or untrusted sources", () => {
+    expect(isStaleDaily(dailyBoard({ date: "2026-06-05", chosenExplicitly: true }), TODAY)).toBe(false);
+    for (const source of ["ocr", "manual", "demo"]) {
+      expect(isStaleDaily(makeBoard(TILES, { source }), TODAY)).toBe(false);
+    }
+    expect(isStaleDaily(parseStore(legacyBlob()).current, TODAY)).toBe(false);
+  });
+
+  it("can't prove staleness without a date, or against clock skew", () => {
+    const dateless = { ...dailyBoard() };
+    delete dateless.date;
+    expect(isStaleDaily(dateless, TODAY)).toBe(false);
+    expect(isStaleDaily(dailyBoard({ date: "2026-06-10" }), TODAY)).toBe(false);
+  });
+
+  it("works on the app's metadata slice — no tiles required", () => {
+    // The refocus listener passes boardMeta ({date, source, chosenExplicitly}),
+    // not a full board.
+    expect(isStaleDaily({ date: "2026-06-08", source: "daily", chosenExplicitly: false }, TODAY)).toBe(true);
   });
 });
 

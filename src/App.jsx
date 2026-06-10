@@ -11,6 +11,7 @@ import {
   boardSummary,
   dateLabel,
   decideLaunch,
+  isStaleDaily,
   parseStore,
   serializeStore,
   swapBoards,
@@ -514,6 +515,25 @@ export default function ConnectionsOrganizer() {
           : undefined;
     loadToday(undefined, opts);
   }, [launch, saved, loadToday]);
+
+  // Cover returns that never reload the page: a tab left open overnight
+  // refocuses with yesterday's board still mounted, and the launch decision
+  // never re-runs. On a visibility change to visible with the board on
+  // screen, pure ET-date math decides whether the board has gone stale; if
+  // so, raise the "Today's puzzle is ready" banner — its action is the only
+  // thing that fetches. Re-raising on every qualifying refocus is deliberate:
+  // a dismissal holds until the next hidden→visible transition. No timers —
+  // a tab that stays continuously visible across ET midnight gets nothing,
+  // because an actively playing user must not be nagged mid-session.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      if (screen !== "board" || !boardMeta) return;
+      if (isStaleDaily(boardMeta, todayET())) setTodayBanner(true);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [screen, boardMeta]);
 
   // The resume notice's action: lossless swap back to the previous board.
   // The re-entered board comes back marked chosen-explicitly (it won't be

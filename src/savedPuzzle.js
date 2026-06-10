@@ -64,10 +64,24 @@ export function decideLaunch(saved, todayISO) {
   const { current } = saved;
   if (isExempt(current)) return "resume";
   if (current.source === "unknown") return "fetch-compare";
-  if (current.source === "daily" && current.date && current.date < todayISO) {
-    return "fetch-swap";
-  }
+  if (isStaleDaily(current, todayISO)) return "fetch-swap";
   return "resume";
+}
+
+// A non-exempt daily board provably dated before today — the only kind of
+// board the app ever offers to replace. Shared by the launch decision
+// (fetch-swap) and the refocus listener (the "Today's puzzle is ready"
+// banner on a tab left open overnight). Self-contained: it re-checks
+// exemption, and a dateless or future-dated board (client clock skew) can't
+// be proven stale, so it's never flagged. Needs only the metadata fields, so
+// the app can pass its boardMeta slice rather than a full board.
+export function isStaleDaily(board, todayISO) {
+  return (
+    !isExempt(board) &&
+    board.source === "daily" &&
+    typeof board.date === "string" &&
+    board.date < todayISO
+  );
 }
 
 // Apply a successful daily fetch on the "fetch-swap" launch path: the stale
