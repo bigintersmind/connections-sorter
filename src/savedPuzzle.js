@@ -199,6 +199,19 @@ function labelsOrDefault(v) {
     : ["", "", "", ""];
 }
 
+// One-line summary of a board for the menu's resume card: the date label when
+// the board has one, plus locked-group progress when there is any — "Today ·
+// 2 groups locked", "Mon, Jun 8", "1 group locked" — with a generic nudge for
+// a dateless, lockless board so the card never renders an empty line.
+export function boardSummary(board, todayISO) {
+  const parts = [];
+  const label = dateLabel(board.date, todayISO);
+  if (label) parts.push(label);
+  const locked = board.lockedRows.filter(Boolean).length;
+  if (locked > 0) parts.push(`${locked} ${locked === 1 ? "group" : "groups"} locked`);
+  return parts.length ? parts.join(" · ") : "Pick up where you left off";
+}
+
 // Board-header label for a dated board. `todayISO` is supplied by the caller
 // (todayET() in the app) so this stays pure calendar math — no clock reads.
 export function dateLabel(dateISO, todayISO) {

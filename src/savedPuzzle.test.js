@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyDailySwap,
   applyLegacyDaily,
+  boardSummary,
   dateLabel,
   decideLaunch,
   makeBoard,
@@ -435,5 +436,33 @@ describe("dateLabel", () => {
     // Same board, one tick after ET midnight: todayISO advances a day and the
     // label must immediately stop claiming "Today".
     expect(dateLabel("2026-06-09", "2026-06-10")).toBe("Tue, Jun 9");
+  });
+});
+
+describe("boardSummary", () => {
+  it("joins the date label and locked-group progress for the resume card", () => {
+    const board = dailyBoard({ date: "2026-06-08", lockedRows: [true, true, false, false] });
+    expect(boardSummary(board, "2026-06-09")).toBe("Mon, Jun 8 · 2 groups locked");
+  });
+
+  it("labels a previous board dated today as Today — the swapped-back case", () => {
+    // After resuming yesterday's board, the menu card offers today's board
+    // back; its one default lock also pins the singular form.
+    expect(boardSummary(dailyBoard(), "2026-06-09")).toBe("Today · 1 group locked");
+  });
+
+  it("shows just the date when nothing is locked", () => {
+    const board = dailyBoard({ lockedRows: [false, false, false, false] });
+    expect(boardSummary(board, "2026-06-10")).toBe("Tue, Jun 9");
+  });
+
+  it("never renders an empty line — progress alone, or a generic nudge", () => {
+    // A dateless board (ocr/manual/demo/legacy) still summarizes its locks;
+    // with nothing at all, the card gets a friendly fallback.
+    const legacy = parseStore(legacyBlob()).current;
+    expect(boardSummary(legacy, "2026-06-09")).toBe("1 group locked");
+    expect(boardSummary(makeBoard(TILES, { source: "manual" }), "2026-06-09")).toBe(
+      "Pick up where you left off",
+    );
   });
 });

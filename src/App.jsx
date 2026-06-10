@@ -8,6 +8,7 @@ import { fitTileFont } from "./fitTileFont.js";
 import {
   applyDailySwap,
   applyLegacyDaily,
+  boardSummary,
   dateLabel,
   decideLaunch,
   parseStore,
@@ -294,9 +295,10 @@ export default function ConnectionsOrganizer() {
   // only appear on non-exempt stale dailies, because only those launch with
   // a swapFrom.
   const [todayBanner, setTodayBanner] = useState(false);
-  // The previous-board slot rides along untouched this slice — nothing writes
-  // it yet, but a save that has one must not lose it on the next persist.
-  const previousRef = useRef(saved?.previous ?? null);
+  // The previous-board slot. React state (not a ref) because the menu's
+  // "Resume previous board" card renders from it; persisted alongside the
+  // current board on every write.
+  const [previousBoard, setPreviousBoard] = useState(saved?.previous ?? null);
   const [manualText, setManualText] = useState("");
   // Whether the manual screen was reached via OCR ("ocr") or typed directly
   // ("manual") — decides the source stamped when its Load Puzzle commits.
@@ -346,14 +348,14 @@ export default function ConnectionsOrganizer() {
               labels,
               ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
             },
-            previous: previousRef.current,
+            previous: previousBoard,
           }),
         );
       } catch {
         // storage unavailable — silent
       }
     }
-  }, [tiles, lockedRows, labels, boardMeta]);
+  }, [tiles, lockedRows, labels, boardMeta, previousBoard]);
 
   // Drop a fresh set of words onto the board. `meta` records where they came
   // from (see boardMeta above); callers that can't know better default to
@@ -424,10 +426,10 @@ export default function ConnectionsOrganizer() {
           // its provenance; the persist effect writes the stamped store
           // through. Different words take the standard swap-with-notice path.
           const result = applyLegacyDaily(
-            { current: compareFrom, previous: previousRef.current },
+            { current: compareFrom, previous: previousBoard },
             { words, date: resolvedDate },
           );
-          previousRef.current = result.store.previous;
+          setPreviousBoard(result.store.previous);
           if (result.matched) {
             setBoardMeta(metaOf(result.store.current));
             setScreen("board");
@@ -440,10 +442,10 @@ export default function ConnectionsOrganizer() {
           // one render batch, so the persist effect writes the whole swapped
           // store at once — nothing was persisted before this point.
           const next = applyDailySwap(
-            { current: swapFrom, previous: previousRef.current },
+            { current: swapFrom, previous: previousBoard },
             { words, date: resolvedDate },
           );
-          previousRef.current = next.previous;
+          setPreviousBoard(next.previous);
           loadPuzzle(next.current.tiles, metaOf(next.current));
           setResumeNotice(next.previous);
         } else {
@@ -489,7 +491,7 @@ export default function ConnectionsOrganizer() {
         setFetching(false);
       }
     }
-  }, [loadPuzzle]);
+  }, [loadPuzzle, previousBoard]);
 
   // Cancel an in-flight today-load so a slow request can't complete later and
   // hijack the screen the user has since chosen (Skip, Upload, Enter, Demo).
@@ -518,7 +520,7 @@ export default function ConnectionsOrganizer() {
   // auto-swapped again); today's board — including any sorting done since —
   // moves to the previous slot, so swapping back the other way loses nothing.
   const resumePrevious = useCallback(() => {
-    if (!previousRef.current) return;
+    if (!previousBoard) return;
     const next = swapBoards({
       current: {
         tiles,
@@ -526,16 +528,16 @@ export default function ConnectionsOrganizer() {
         labels,
         ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
       },
-      previous: previousRef.current,
+      previous: previousBoard,
     });
-    previousRef.current = next.previous;
+    setPreviousBoard(next.previous);
     setTiles(next.current.tiles);
     setLockedRows(next.current.lockedRows);
     setLabels(next.current.labels);
     setBoardMeta(metaOf(next.current));
     setSelected(null);
     setResumeNotice(null);
-  }, [tiles, lockedRows, labels, boardMeta]);
+  }, [tiles, lockedRows, labels, boardMeta, previousBoard]);
 
   // The banner's action: retry the today-load that failed (or was skipped) at
   // launch, carrying the board on screen as swapFrom so success takes the
@@ -720,6 +722,29 @@ export default function ConnectionsOrganizer() {
           </div>
 
           {fetchError && <p style={styles.error}>{fetchError}</p>}
+
+          {previousBoard && (
+            <button
+              className="menu-card"
+              style={styles.menuCard}
+              onClick={() => {
+                cancelPendingFetch();
+                resumePrevious();
+                setScreen("board");
+              }}
+              aria-label="Resume your previous board"
+            >
+              <div style={styles.menuCardInner}>
+                <span style={styles.menuIcon} aria-hidden="true">↩</span>
+                <div>
+                  <span style={styles.menuLabel}>Resume previous board</span>
+                  <span style={styles.menuDesc}>
+                    {boardSummary(previousBoard, todayET())}
+                  </span>
+                </div>
+              </div>
+            </button>
+          )}
 
           <button
             className="menu-card"
