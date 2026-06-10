@@ -287,6 +287,13 @@ export default function ConnectionsOrganizer() {
   // the previous slot). React state only — never persisted — so it shows at
   // swap time and is gone on the next reload, by design.
   const [resumeNotice, setResumeNotice] = useState(null);
+  // "Today's puzzle is ready" banner: shown when the stale-board launch path
+  // couldn't deliver today's puzzle (fetch failure, or the user hit Skip) and
+  // the old board is on screen instead. Its action retries the swap. Same
+  // transient React-state-only lifetime as the notice; structurally it can
+  // only appear on non-exempt stale dailies, because only those launch with
+  // a swapFrom.
+  const [todayBanner, setTodayBanner] = useState(false);
   // The previous-board slot rides along untouched this slice — nothing writes
   // it yet, but a save that has one must not lose it on the next persist.
   const previousRef = useRef(saved?.previous ?? null);
@@ -358,9 +365,11 @@ export default function ConnectionsOrganizer() {
     setBoardMeta(meta ?? { source: "unknown", chosenExplicitly: false });
     setSelected(null);
     setError(null);
-    // A fresh load invalidates any pending resume offer. The swap path
-    // re-sets the notice right after this call, in the same render batch.
+    // A fresh load invalidates any pending resume offer and satisfies the
+    // "today's puzzle is ready" banner. The swap path re-sets the notice
+    // right after this call, in the same render batch.
     setResumeNotice(null);
+    setTodayBanner(false);
     setScreen("board");
   }, []);
 
@@ -450,12 +459,20 @@ export default function ConnectionsOrganizer() {
       // the user off the screen they chose. A timeout or real failure still
       // falls back to the menu.
       if (controller.signal.reason === SKIP_REASON) return;
-      if (swapFrom || compareFrom) {
-        // Stale- or legacy-board launch with no network: resume the old board
-        // untouched — it's still in state, and nothing new was persisted. A
-        // legacy board stays unstamped, so the next launch retries the
-        // comparison. The "Today's puzzle is ready" retry banner ships in
-        // connections-apm.
+      if (swapFrom) {
+        // Stale-board launch (or banner retry) with no network: resume the
+        // old board untouched — it's still in state, and nothing new was
+        // persisted — under the "Today's puzzle is ready" banner, whose
+        // action retries this same load.
+        setTodayBanner(true);
+        setScreen("board");
+        return;
+      }
+      if (compareFrom) {
+        // Legacy-board launch with no network: resume untouched and
+        // unstamped, so the next launch retries the comparison. No banner —
+        // the words never arrived, so for all we know this IS today's board,
+        // and claiming a new puzzle is ready would nag wrongly.
         setScreen("board");
         return;
       }
@@ -519,6 +536,21 @@ export default function ConnectionsOrganizer() {
     setSelected(null);
     setResumeNotice(null);
   }, [tiles, lockedRows, labels, boardMeta]);
+
+  // The banner's action: retry the today-load that failed (or was skipped) at
+  // launch, carrying the board on screen as swapFrom so success takes the
+  // exact same path as the launch swap — old board to the previous slot,
+  // today's board with the resume notice. Failure re-lands here, banner up.
+  const retryToday = useCallback(() => {
+    loadToday(undefined, {
+      swapFrom: {
+        tiles,
+        lockedRows,
+        labels,
+        ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
+      },
+    });
+  }, [loadToday, tiles, lockedRows, labels, boardMeta]);
 
   const handleTap = useCallback((index) => {
     const row = Math.floor(index / 4);
@@ -605,7 +637,15 @@ export default function ConnectionsOrganizer() {
             onClick={() => {
               autoLoadedRef.current = true;
               cancelPendingFetch();
-              setScreen("menu");
+              // Skipping a stale-board load lands on the old board (it's a
+              // perfectly good one) under the "Today's puzzle is ready"
+              // banner; the menu is for launches with no board to show.
+              if (launch === "fetch-swap") {
+                setTodayBanner(true);
+                setScreen("board");
+              } else {
+                setScreen("menu");
+              }
             }}
           >
             Skip — start another way
@@ -815,6 +855,28 @@ export default function ConnectionsOrganizer() {
           <button className="btn small-btn" style={styles.smallBtn} onClick={resetBoard}>Reset</button>
         </div>
       </div>
+
+      {todayBanner && (
+        <div className="notice" style={styles.notice} role="status">
+          <span>Today's puzzle is ready —</span>
+          <button
+            className="ghost-btn"
+            style={styles.noticeAction}
+            onClick={retryToday}
+            disabled={fetching}
+          >
+            {fetching ? "Loading…" : "Play today's puzzle"}
+          </button>
+          <button
+            className="ghost-btn"
+            style={styles.noticeDismiss}
+            onClick={() => setTodayBanner(false)}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {resumeNotice && (
         <div className="notice" style={styles.notice} role="status">
