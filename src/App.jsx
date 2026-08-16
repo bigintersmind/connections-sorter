@@ -1,22 +1,19 @@
-import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import {
-  CLIPBOARD_ERROR_MESSAGES,
-  extractClipboardImage,
-  hasClipboardReadSupport,
-} from "./clipboardImage.js";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fitTileFont } from "./fitTileFont.js";
+import { windowDates } from "../shared/puzzleDates.js";
 import {
-  applyDailySwap,
-  applyLegacyDaily,
-  boardSummary,
-  dateLabel,
+  CUSTOM_KEY,
+  activate,
   decideLaunch,
-  isStaleDaily,
+  emptyStore,
   parseStore,
+  placeFetched,
+  resetActive,
   serializeStore,
-  swapBoards,
+  setCustom,
+  switcherEntries,
   todayET,
-  weekdayLong,
+  updateActive,
 } from "./savedPuzzle.js";
 
 const ROW_COLORS = [
@@ -26,71 +23,23 @@ const ROW_COLORS = [
   { name: "Purple", bg: "#ba81c5", text: "#1a1a1a", glow: "rgba(186,129,197,0.6)" },
 ];
 
-// Hand-crafted sample used by the "Try Demo Puzzle" button on the menu.
-// Categories are intentionally legible so the visual structure (color rows,
-// lockable groups) lands faster than the wordplay would.
-const DEMO_PUZZLE_WORDS = [
-  "LEMON", "LIME", "ORANGE", "GRAPEFRUIT",
-  "YACHT", "CANOE", "KAYAK", "FERRY",
-  "RUN", "LEAP", "DASH", "SPRINT",
-  "ROCK", "RUBBER", "JAZZ", "BROADWAY",
-];
-
-function shuffled(arr) {
-  const next = [...arr];
-  for (let i = next.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [next[i], next[j]] = [next[j], next[i]];
-  }
-  return next;
-}
-
 const STORAGE_KEY = "connections-puzzle";
 
 const OFFICIAL_GAME_URL = "https://www.nytimes.com/games/connections";
 
-// Abort reason for a user-initiated cancel (Skip, or starting another load),
-// so it can be told apart from a timeout/failure abort.
-const SKIP_REASON = "user-skip";
+// Abort reason for a load the app itself replaced (the player tapped another
+// day, or switched to a saved one), so it can be told apart from a timeout or a
+// real failure — a superseded request must stay silent.
+const SUPERSEDED = "superseded";
 
-// Recent-date chip helpers. These build the chip labels client-side; the
-// Worker (worker/puzzle.js) is the source of truth for which dates are
-// actually loadable. todayET itself lives in savedPuzzle.js (tested, DST
-// boundaries pinned) because it also drives the launch decision, the refocus
-// staleness check, and swapBoards — a wrong zone there means a wrong puzzle,
-// not just a wrong label.
-const PUZZLE_LAUNCH_DATE = "2023-06-12";
-const RECENT_WINDOW_DAYS = 6; // today + this many prior days
+const FETCH_TIMEOUT_MS = 9000;
 
-// Calendar arithmetic on a YYYY-MM-DD string, DST-safe (operates in UTC).
-function addDays(isoDate, delta) {
-  const [y, m, d] = isoDate.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + delta);
-  return dt.toISOString().slice(0, 10);
-}
-
-// Today + recent days (down to launch), each with a short chip label.
-function buildRecentDates() {
-  const today = todayET();
-  const out = [];
-  for (let i = 0; i <= RECENT_WINDOW_DAYS; i++) {
-    const date = addDays(today, -i);
-    if (date < PUZZLE_LAUNCH_DATE) break;
-    let label;
-    if (i === 0) label = "Today";
-    else if (i === 1) label = "Yesterday";
-    else {
-      const [y, m, d] = date.split("-").map(Number);
-      label = new Intl.DateTimeFormat("en-US", {
-        weekday: "short",
-        timeZone: "UTC",
-      }).format(new Date(Date.UTC(y, m - 1, d)));
-    }
-    out.push({ date, label });
-  }
-  return out;
-}
+// Stable empty fallbacks for a board-less render. Module constants rather than
+// fresh literals so effect dependency arrays don't see a "new" value every
+// render while the board is loading.
+const NO_TILES = [];
+const NO_LOCKS = [false, false, false, false];
+const NO_LABELS = ["", "", "", ""];
 
 function parseTiles(text) {
   if (!text) return null;
@@ -111,141 +60,19 @@ function parseTiles(text) {
   return null;
 }
 
-function normalizeTileText(s) {
-  return s.replace(/[^A-Za-z'\-.& ]+/g, " ").replace(/\s+/g, " ").trim().toUpperCase();
-}
-
-// Fallback: dump raw OCR text into one-line-per-entry candidates. Loses
-// per-tile alignment but gives the user something to clean up if spatial
-// reconstruction fails.
-function extractWordsFromOcr(rawText) {
-  const seen = new Set();
-  const out = [];
-  for (const line of rawText.split("\n")) {
-    const cleaned = normalizeTileText(line);
-    if (cleaned.length < 2) continue;
-    if (seen.has(cleaned)) continue;
-    seen.add(cleaned);
-    out.push(cleaned);
-  }
-  return out;
-}
-
-// Walk Tesseract's nested block→para→line→word tree into a flat word list.
-function gatherWords(blocks) {
-  const out = [];
-  for (const block of blocks ?? []) {
-    for (const para of block.paragraphs ?? []) {
-      for (const line of para.lines ?? []) {
-        for (const word of line.words ?? []) {
-          if (word.bbox && word.text) out.push(word);
-        }
-      }
-    }
-  }
-  return out;
-}
-
-// 1D k-means with deterministic even-spaced init. Returns an array of
-// cluster indices (parallel to `values`), with cluster 0 = lowest center.
-function kmeans1d(values, k) {
-  if (values.length === 0) return [];
-  let min = Infinity, max = -Infinity;
-  for (const v of values) { if (v < min) min = v; if (v > max) max = v; }
-  let centers = Array.from({ length: k }, (_, i) => min + (max - min) * (i + 0.5) / k);
-  const assignments = new Array(values.length).fill(0);
-  for (let iter = 0; iter < 30; iter++) {
-    let changed = false;
-    for (let i = 0; i < values.length; i++) {
-      let best = 0, bestD = Infinity;
-      for (let c = 0; c < k; c++) {
-        const d = Math.abs(values[i] - centers[c]);
-        if (d < bestD) { bestD = d; best = c; }
-      }
-      if (assignments[i] !== best) { assignments[i] = best; changed = true; }
-    }
-    if (!changed) break;
-    const sums = new Array(k).fill(0);
-    const counts = new Array(k).fill(0);
-    for (let i = 0; i < values.length; i++) {
-      sums[assignments[i]] += values[i];
-      counts[assignments[i]] += 1;
-    }
-    for (let c = 0; c < k; c++) {
-      if (counts[c] > 0) centers[c] = sums[c] / counts[c];
-    }
-  }
-  // Re-rank so cluster 0 is the smallest center (top row / left column).
-  const order = centers.map((c, i) => [c, i]).sort((a, b) => a[0] - b[0]).map(p => p[1]);
-  const remap = new Array(k);
-  for (let i = 0; i < k; i++) remap[order[i]] = i;
-  return assignments.map(a => remap[a]);
-}
-
-// True iff every letter in the text is uppercase. Connections tiles are
-// rendered ALL CAPS; UI chrome ("Create four groups of four!", "Mistakes
-// Remaining:") is title/sentence case, so this drops chrome cleanly.
-function isAllCapsLetters(text) {
-  const letters = text.replace(/[^A-Za-z]/g, "");
-  return letters.length > 0 && letters === letters.toUpperCase();
-}
-
-// Spatially reconstruct 16 tiles from OCR word bboxes. Filters out non-tile
-// text (title, footer, mistakes counter) by case — tile text is uppercase,
-// chrome is not — then clusters the survivors into a 4×4 grid. Returns 16
-// strings (some may be empty if OCR missed a tile) or null if reconstruction
-// can't get a confident 4×4.
-function reconstructTilesFromBboxes(words) {
-  if (words.length < 8) return null;
-
-  const tileWords = words.filter(w => isAllCapsLetters(w.text));
-  if (tileWords.length < 8) return null;
-
-  const yCenters = tileWords.map(w => (w.bbox.y0 + w.bbox.y1) / 2);
-  const rowAssign = kmeans1d(yCenters, 4);
-
-  const cells = Array.from({ length: 16 }, () => []);
-  for (let r = 0; r < 4; r++) {
-    const rowWords = tileWords.filter((_, i) => rowAssign[i] === r);
-    if (rowWords.length === 0) continue;
-    const xCenters = rowWords.map(w => (w.bbox.x0 + w.bbox.x1) / 2);
-    const colAssign = kmeans1d(xCenters, 4);
-    for (let i = 0; i < rowWords.length; i++) {
-      cells[r * 4 + colAssign[i]].push(rowWords[i]);
-    }
-  }
-
-  // At least 8 of 16 cells must have content for us to trust the layout.
-  const populated = cells.filter(c => c.length > 0).length;
-  if (populated < 8) return null;
-
-  return cells.map(cell => {
-    if (cell.length === 0) return "";
-    cell.sort((a, b) => {
-      const aMid = (a.bbox.y0 + a.bbox.y1) / 2;
-      const bMid = (b.bbox.y0 + b.bbox.y1) / 2;
-      const lineH = Math.max(a.bbox.y1 - a.bbox.y0, b.bbox.y1 - b.bbox.y0);
-      // If words are on different physical lines (wrap), top-to-bottom wins.
-      if (Math.abs(aMid - bMid) > lineH * 0.5) return aMid - bMid;
-      return a.bbox.x0 - b.bbox.x0;
-    });
-    return normalizeTileText(cell.map(w => w.text).join(" "));
-  });
-}
-
-// Read the saved two-slot store ({ current, previous }) or null. All shape
-// knowledge — including migrating pre-metadata flat blobs — lives in
-// savedPuzzle.js; the try/catch here only covers localStorage itself being
-// unavailable (private mode, storage disabled).
+// Read the saved store, or null. All shape knowledge — including migrating the
+// older two-slot and flat saves — lives in savedPuzzle.js; the try/catch here
+// only covers localStorage itself being unavailable (private mode, storage
+// disabled).
 //
-// "Save existed but didn't parse" is not the same as "no save": treating it
-// as no-save is the designed recovery, but the first successful persist then
+// "Save existed but didn't parse" is not the same as "no save": treating it as
+// no-save is the designed recovery, but the first successful persist then
 // overwrites the main key, making "my board vanished" undebuggable. Keep the
 // evidence under a side key and leave a console trace.
-function loadSaved() {
+function loadSaved(todayISO) {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    const store = parseStore(raw);
+    const store = parseStore(raw, todayISO);
     if (raw != null && !store) {
       console.warn(`connections: discarding unreadable save (${raw.length} chars), kept at ${STORAGE_KEY}.bad`);
       try {
@@ -260,69 +87,87 @@ function loadSaved() {
   }
 }
 
-// The slice of a board the app keeps in React state next to tiles/locks/labels.
-function metaOf(board) {
-  return {
-    date: board.date,
-    source: board.source,
-    chosenExplicitly: board.chosenExplicitly,
-  };
+// Possessive day name for the loading and failure lines: "today's" /
+// "yesterday's" / "Thursday's". Only ever called with a date key — the custom
+// board is never fetched, so it never appears in one of these messages.
+function possessiveDay(key, todayISO) {
+  // Which day this is comes from the same function that labels the segments —
+  // asked with no store, since only the label matters — so a message and the
+  // segment it refers to can't disagree.
+  const label = switcherEntries(null, todayISO).find((e) => e.key === key)?.label;
+  if (label === "Today") return "today's";
+  if (label === "Yesterday") return "yesterday's";
+  // The remaining segment is labelled "Thu" because four of them have to fit a
+  // 320px phone; in a sentence it gets spelled out.
+  const [y, m, d] = key.split("-").map(Number);
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+  return `${weekday}'s`;
 }
 
 export default function ConnectionsOrganizer() {
   // The save and the launch decision are taken once, at mount — a re-render
-  // after ET midnight must not re-decide and yank a board mid-play (refocus
-  // is handled separately by the visibilitychange effect below).
-  const [{ saved, launch }] = useState(() => {
-    const stored = loadSaved();
-    return { saved: stored, launch: decideLaunch(stored, todayET()) };
+  // after ET midnight must not re-decide and yank a board mid-play. (A tab left
+  // open across midnight is handled by the visibilitychange effect below, which
+  // only re-labels the switcher.)
+  const [{ initialStore, launch }] = useState(() => {
+    const todayISO = todayET();
+    const saved = loadSaved(todayISO);
+    return { initialStore: saved ?? emptyStore(), launch: decideLaunch(saved, todayISO) };
   });
-  // "resume" lands straight on the board; every fetch decision (fetch-today,
-  // fetch-swap, fetch-compare) goes through the loading screen (state below
-  // still holds the old board on the swap/compare paths, so a failed fetch
-  // can fall back to it untouched).
-  const [screen, setScreen] = useState(launch === "resume" ? "board" : "loading");
-  const [tiles, setTiles] = useState(saved?.current.tiles ?? []);
+
+  // The one source of truth for the board: tiles, locks and labels are DERIVED
+  // from the active board below, never mirrored into their own state. Every
+  // play action writes through the store (updateActive/resetActive), so
+  // switching days can't strand half of a board's state behind.
+  const [store, setStore] = useState(initialStore);
+  // The ET date the switcher labels itself against. Refreshed on refocus so a
+  // tab left open overnight re-labels ("Today" becomes "Yesterday") — see the
+  // visibilitychange effect. Activations never read this: they call todayET()
+  // themselves, so a stamp can't be written from a stale render.
+  const [today, setToday] = useState(todayET);
+  const [screen, setScreen] = useState("board");
+  // The launch fetch blanks the board area until it settles. On a new day the
+  // store may still point at YESTERDAY's board (its key survived, only
+  // activeDate went stale); showing it while today loads would look like the
+  // app opened on the wrong puzzle. Cleared by the first landing — after that,
+  // switching days keeps the outgoing board on screen instead of blanking.
+  const [launching, setLaunching] = useState(launch === "fetch-today");
+  // Key of the day currently being fetched (drives the segment spinner), or
+  // null.
+  const [fetchingKey, setFetchingKey] = useState(null);
+  // { key, message } for the last failed load. Rendered as a one-line notice
+  // when a board is on screen, or inside the empty state when there is none.
+  const [loadError, setLoadError] = useState(null);
   const [selected, setSelected] = useState(null);
-  const [lockedRows, setLockedRows] = useState(saved?.current.lockedRows ?? [false, false, false, false]);
   const [flashRow, setFlashRow] = useState(null);
-  const [labels, setLabels] = useState(saved?.current.labels ?? ["", "", "", ""]);
-  // Provenance of the board on screen: { date?, source, chosenExplicitly }.
-  // Stamped by every load path and persisted alongside the play state so a
-  // returning visit can tell a stale daily board from a deliberate choice.
-  const [boardMeta, setBoardMeta] = useState(() => (saved ? metaOf(saved.current) : null));
-  // The board offered by the transient resume notice (the one just moved to
-  // the previous slot). React state only — never persisted — so it shows at
-  // swap time and is gone on the next reload, by design.
-  const [resumeNotice, setResumeNotice] = useState(null);
-  // "Today's puzzle is ready" banner: shown when today's puzzle exists but
-  // isn't on screen — a stale-board launch whose fetch failed, the user hit
-  // Skip, or a refocus across ET midnight (the visibilitychange effect
-  // below). Its action retries the swap. Same transient React-state-only
-  // lifetime as the notice; all three paths gate on a non-exempt stale
-  // daily — the launch paths via decideLaunch, the refocus path via
-  // isStaleDaily.
-  const [todayBanner, setTodayBanner] = useState(false);
-  // The previous-board slot. React state (not a ref) because the menu's
-  // "Resume previous board" card renders from it; persisted alongside the
-  // current board on every write.
-  const [previousBoard, setPreviousBoard] = useState(saved?.previous ?? null);
-  const [manualText, setManualText] = useState("");
-  // Whether the manual screen was reached via OCR ("ocr") or typed directly
-  // ("manual") — decides the source stamped when its Load Puzzle commits.
-  const [manualSource, setManualSource] = useState("manual");
-  const [error, setError] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
-  const [fetching, setFetching] = useState(false);
-  const [fetchError, setFetchError] = useState(null);
+  const [manualText, setManualText] = useState("");
+  const [manualError, setManualError] = useState(null);
+  const [overflowOpen, setOverflowOpen] = useState(false);
   const autoLoadedRef = useRef(false);
   const fetchAbortRef = useRef(null);
   const tileRefs = useRef([]);
+  const segsRef = useRef(null);
+  const overflowRef = useRef(null);
+  const manualItemRef = useRef(null);
+  const howRef = useRef(null);
+
+  const activeKey = store.active;
+  const activeBoard = activeKey ? store.boards[activeKey] ?? null : null;
+  const board = launching ? null : activeBoard;
+  const tiles = board?.tiles ?? NO_TILES;
+  const lockedRows = board?.lockedRows ?? NO_LOCKS;
+  const labels = board?.labels ?? NO_LABELS;
+  const entries = switcherEntries(store, today);
 
   // Shrink-to-fit every tile's font once the board is on screen and whenever
-  // the words change. `screen` is a dep so tiles get fit when we first land on
-  // the board (navigating menu→board doesn't touch `tiles`). Re-fits on resize
-  // (which also fires on device rotation) so words stay whole at any width.
+  // the words change. `screen` is a dep so tiles get fit on the way back from
+  // manual entry; `activeKey` because a day switch replaces the board.
+  // Re-fits on resize (which also fires on device rotation) so words stay whole
+  // at any width.
   useLayoutEffect(() => {
     const fitAll = () => {
       for (const el of tileRefs.current) {
@@ -339,25 +184,16 @@ export default function ConnectionsOrganizer() {
     document.fonts?.ready.then(fitAll);
     window.addEventListener("resize", fitAll);
     return () => window.removeEventListener("resize", fitAll);
-  }, [tiles, screen]);
+  }, [tiles, screen, activeKey]);
 
-  // Persist on changes. Writing through serializeStore means a resumed legacy
-  // save is rewritten in the two-slot shape (with source "unknown") on its
-  // first persist — the migration is this effect doing its normal job.
+  // Persist the whole store on every change. Writing through serializeStore
+  // means a migrated save is rewritten in the v2 shape on its first persist —
+  // the migration is this effect doing its normal job. An empty store is worth
+  // writing too: it's what a cleared board looks like.
   useEffect(() => {
-    if (tiles.length !== 16) return;
-    // Serialize outside the try: serializeStore throwing means an invalid
-    // board reached React state — a programming error that must surface
-    // loudly, not vanish into the storage-unavailable catch below.
-    const payload = serializeStore({
-      current: {
-        tiles,
-        lockedRows,
-        labels,
-        ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
-      },
-      previous: previousBoard,
-    });
+    // Serialized outside the try so the catch below covers only localStorage
+    // being unavailable, never a bug in the serializer.
+    const payload = serializeStore(store);
     try {
       localStorage.setItem(STORAGE_KEY, payload);
     } catch (err) {
@@ -366,253 +202,169 @@ export default function ConnectionsOrganizer() {
       // trace a "my board vanished" report will ever have.
       console.warn("connections: couldn't persist the board:", err?.name ?? err);
     }
-  }, [tiles, lockedRows, labels, boardMeta, previousBoard]);
+  }, [store]);
 
-  // Drop a fresh set of words onto the board. `meta` records where they came
-  // from (see boardMeta above); callers that can't know better default to
-  // unknown provenance.
-  const loadPuzzle = useCallback((words, meta) => {
-    setTiles(words);
-    setLockedRows([false, false, false, false]);
-    setLabels(["", "", "", ""]);
-    setBoardMeta(meta ?? { source: "unknown", chosenExplicitly: false });
-    setSelected(null);
-    setError(null);
-    // A fresh load invalidates any pending resume offer and satisfies the
-    // "today's puzzle is ready" banner. The swap path re-sets the notice
-    // right after this call, in the same render batch.
-    setResumeNotice(null);
-    setTodayBanner(false);
-    setScreen("board");
+  // A tab left open overnight comes back with yesterday's board still mounted.
+  // Nothing is fetched and nothing moves: we just re-read the ET date so the
+  // switcher re-labels itself (the board the player is on slides from "Today"
+  // to "Yesterday", and a "Today" segment appears alongside it). Both
+  // visibilitychange (tab switch, phone unlock) and window focus (clicking
+  // back into an already-visible window) count as "coming back"; a tab that
+  // stays visible and focused across midnight is left alone until the player
+  // touches the switcher (see loadDay). setToday with an unchanged value is a
+  // no-op in React, so this is free on every other refocus.
+  useEffect(() => {
+    const relabel = () => {
+      if (document.visibilityState === "visible") setToday(todayET());
+    };
+    document.addEventListener("visibilitychange", relabel);
+    window.addEventListener("focus", relabel);
+    return () => {
+      document.removeEventListener("visibilitychange", relabel);
+      window.removeEventListener("focus", relabel);
+    };
   }, []);
 
-  // Fetch the day's 16 words from our same-origin Worker proxy (which strips
-  // the answer groupings server-side) and drop them onto the board. On a
-  // plain load, any failure or timeout falls back to the menu so OCR/manual
-  // stay available — it never blocks the user with a blank board or hard
-  // error; the swap/compare variants fall back to the board instead.
-  // `swapFrom` is set by the stale-board launch path and the banner's retry:
-  // on success the old board (passed as swapFrom) moves to the previous slot
-  // and the notice offers it back; on failure we fall back to resuming it
-  // instead of the menu, since there's a perfectly good board to show.
-  // `compareFrom` is the legacy-save launch path: the fetch settles whether
-  // the pre-metadata board is already today's (word comparison) before
-  // deciding to stamp it in place or swap it out.
-  const loadToday = useCallback(async (date, { swapFrom, compareFrom } = {}) => {
-    // Cancel any in-flight load (tapping another day, or Skip) so a stale
-    // request can't later yank the user onto the board. SKIP_REASON marks it
-    // as user-initiated so the catch below stays silent.
-    fetchAbortRef.current?.abort(SKIP_REASON);
-    const controller = new AbortController();
-    fetchAbortRef.current = controller;
-    setFetching(true);
-    setFetchError(null);
-    const timeout = setTimeout(() => controller.abort("timeout"), 9000);
-    try {
-      const url = date ? `/api/puzzle?date=${encodeURIComponent(date)}` : "/api/puzzle";
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) throw new Error("fetch_failed");
-      const data = await res.json();
-      // Shape AND element type: a non-string tile would either crash
-      // makeBoard on the swap path or poison state so serializeStore throws
-      // on every persist — reject it here as bad_data like any other
-      // malformed response.
-      const words =
-        Array.isArray(data?.words) &&
-        data.words.length === 16 &&
-        data.words.every((w) => typeof w === "string")
-          ? data.words
-          : null;
-      if (!words) throw new Error("bad_data");
-      // The Worker already returns clean, uppercased words; pass them through
-      // verbatim so accented tiles (e.g. "EL NIÑO") aren't mangled by the
-      // OCR/manual-entry normalizer.
-      //
-      // Only commit if this request is still live. A resolved fetch never
-      // rejects, so the catch below can't guard this path: if the user hit
-      // Skip or started another load while the fetch/parse was in flight, the
-      // signal is aborted (Skip, supersede, and timeout all set it), and
-      // dropping the words here stops an already-settled request from yanking
-      // the user onto the board they navigated away from.
-      //
-      // Stamp the board with the *response's* server-resolved date — never the
-      // client clock — and mark it chosen-explicitly only when a specific past
-      // date was requested (the chips); auto-load and the "Today's Puzzle"
-      // card pass no date and stay swappable when a new day arrives.
-      if (!controller.signal.aborted) {
-        // Validate at the trust boundary: the swap/compare paths normalize
-        // the date downstream, but the plain path stamps it straight into
-        // in-memory boardMeta, where a non-ISO string would survive until
-        // render (the persist normalizer only cleans the written copy).
-        const resolvedDate =
+  // The switcher is sized to fit every segment down to 320px, but it scrolls
+  // rather than collide if a font ever blows that budget (see .segs in
+  // index.css) — in which case the day you just switched to has to be the one
+  // you can see.
+  useEffect(() => {
+    segsRef.current
+      ?.querySelector('[aria-pressed="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeKey]);
+
+  // Cancel an in-flight load so a slow request can't complete later and yank
+  // the player onto a day they've since navigated away from.
+  const abortInFlight = useCallback(() => {
+    fetchAbortRef.current?.abort(SUPERSEDED);
+  }, []);
+
+  // Everything that becomes true the moment a board lands on screen, from any
+  // path: the launch blank is over, a stale failure message is gone, and no
+  // tile stays picked up from the board we just left.
+  const landed = useCallback(() => {
+    setLaunching(false);
+    setLoadError(null);
+    setSelected(null);
+  }, []);
+
+  // Show a day. A day whose board is saved switches instantly with no network
+  // — the outgoing board keeps its play state, so switching back is lossless.
+  // A day with no board is fetched in place: the current board stays on screen
+  // (only the tapped segment shows it's working) until the words arrive.
+  // `key` always comes from switcherEntries, so it's either a date inside the
+  // loadable window or CUSTOM_KEY — and Custom only ever appears once its
+  // board exists, i.e. on the instant path.
+  const loadDay = useCallback(
+    async (key) => {
+      // The one place a continuously-visible tab learns that ET midnight has
+      // passed: the player is touching the switcher, so re-labelling now can't
+      // interrupt anything. If the day they tapped has since aged out of the
+      // window, the Worker would refuse it (out_of_range) — re-label and let
+      // them pick again from the days that exist rather than show an error
+      // for a segment that shouldn't be there.
+      const now = todayET();
+      if (now !== today) {
+        setToday(now);
+        if (key !== CUSTOM_KEY && !windowDates(now).includes(key)) return;
+      }
+      if (Object.hasOwn(store.boards, key)) {
+        abortInFlight();
+        // Re-checked inside the updater because a fetch that landed in the same
+        // batch may have adopted the custom board into a dated one, taking this
+        // key with it; activate() throws on a missing board.
+        setStore((s) => (Object.hasOwn(s.boards, key) ? activate(s, key, todayET()) : s));
+        landed();
+        return;
+      }
+
+      abortInFlight();
+      const controller = new AbortController();
+      fetchAbortRef.current = controller;
+      setFetchingKey(key);
+      const timeout = setTimeout(() => controller.abort("timeout"), FETCH_TIMEOUT_MS);
+      try {
+        // Today goes without a ?date= param: a client clock a few minutes ahead
+        // of the server would otherwise ask for a date the Worker reads as the
+        // future and rejects. The response carries the server-resolved date
+        // either way, and that — never the client clock — is what the board is
+        // filed under.
+        const url =
+          key === todayET() ? "/api/puzzle" : `/api/puzzle?date=${encodeURIComponent(key)}`;
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) throw new Error("fetch_failed");
+        const data = await res.json();
+        // Shape AND element type: placeFetched rejects anything that isn't 16
+        // strings (it treats a bad call as a programming error), so a malformed
+        // response has to be caught here, as bad_data.
+        const words =
+          Array.isArray(data?.words) &&
+          data.words.length === 16 &&
+          data.words.every((w) => typeof w === "string")
+            ? data.words
+            : null;
+        if (!words) throw new Error("bad_data");
+        const date =
           typeof data?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.date)
             ? data.date
-            : undefined;
-        if (compareFrom) {
-          // Legacy save: matching words mean the user was already on today's
-          // puzzle — keep their board (still in state from mount) and stamp
-          // its provenance; the persist effect writes the stamped store
-          // through. Different words take the standard swap-with-notice path.
-          const result = applyLegacyDaily(
-            { current: compareFrom, previous: previousBoard },
-            { words, date: resolvedDate },
-          );
-          setPreviousBoard(result.store.previous);
-          if (result.matched) {
-            setBoardMeta(metaOf(result.store.current));
-            setScreen("board");
-          } else {
-            loadPuzzle(result.store.current.tiles, metaOf(result.store.current));
-            setResumeNotice(result.store.previous);
-          }
-        } else if (swapFrom) {
-          // Atomic by construction: previous slot and current board change in
-          // one render batch, so the persist effect writes the whole swapped
-          // store at once — a partially swapped store is never persisted.
-          const next = applyDailySwap(
-            { current: swapFrom, previous: previousBoard },
-            { words, date: resolvedDate },
-          );
-          setPreviousBoard(next.previous);
-          loadPuzzle(next.current.tiles, metaOf(next.current));
-          setResumeNotice(next.previous);
-        } else {
-          loadPuzzle(words, {
-            date: resolvedDate,
-            source: "daily",
-            chosenExplicitly: Boolean(date),
-          });
+            : key;
+        // A resolved fetch never rejects, so the catch below can't guard this:
+        // if the player tapped another day while this request was in flight,
+        // its signal is aborted and the words are dropped rather than yanking
+        // them off the board they chose.
+        if (controller.signal.aborted) return;
+        // The Worker already returns clean, uppercased words; they're passed
+        // through verbatim so accented tiles ("EL NIÑO") aren't mangled.
+        setStore((s) => placeFetched(s, { date, words }, todayET()));
+        landed();
+      } catch (err) {
+        // A load the app itself replaced must not flash a self-inflicted error.
+        if (controller.signal.reason === SUPERSEDED) return;
+        // Every other failure gets a console trace. The try block contains
+        // commit logic too, so this catch can see a programming error — without
+        // a log it would masquerade as a network failure and Retry would loop
+        // undiagnosably.
+        console.error(
+          "connections: puzzle load failed:",
+          controller.signal.aborted ? controller.signal.reason : err,
+        );
+        // Where this renders depends on whether a board is on screen: a
+        // one-line notice under the header, or the empty state's message. Both
+        // read from the same state and offer the same Retry.
+        setLoadError({
+          key,
+          message: `Couldn't load ${possessiveDay(key, todayET())} puzzle`,
+        });
+      } finally {
+        clearTimeout(timeout);
+        // Only the live request clears the shared fetching state. A superseded
+        // request (its controller already replaced in the ref by a newer load)
+        // must not stop the newer one's spinner.
+        if (fetchAbortRef.current === controller) {
+          fetchAbortRef.current = null;
+          setFetchingKey(null);
         }
       }
-    } catch (err) {
-      // A user-initiated cancel must not flash a self-inflicted error or pull
-      // the user off the screen they chose. A timeout or real failure still
-      // falls back to the menu.
-      if (controller.signal.reason === SKIP_REASON) return;
-      // Every non-skip failure gets a console trace. The try block contains
-      // commit logic too (applyDailySwap/applyLegacyDaily/loadPuzzle), so
-      // this catch can also see a programming error — without a log it would
-      // masquerade as a network failure and the fallbacks below would loop
-      // undiagnosably (the banner retries this same function).
-      console.error("connections: today-load failed:", controller.signal.aborted ? controller.signal.reason : err);
-      if (swapFrom) {
-        // Stale-board launch (or banner retry) with no network: resume the
-        // old board untouched — it's still in state, and nothing new was
-        // persisted — under the "Today's puzzle is ready" banner, whose
-        // action retries this same load.
-        setTodayBanner(true);
-        setScreen("board");
-        return;
-      }
-      if (compareFrom) {
-        // Legacy-board launch with no network: resume untouched and
-        // unstamped, so the next launch retries the comparison. No banner —
-        // the words never arrived, so for all we know this IS today's board,
-        // and claiming a new puzzle is ready would nag wrongly.
-        setScreen("board");
-        return;
-      }
-      setFetchError("Couldn't load that puzzle automatically — upload a screenshot or enter the words instead.");
-      setScreen("menu");
-    } finally {
-      clearTimeout(timeout);
-      // Only the live request clears the shared fetching state. A superseded
-      // request (its controller already replaced in the ref by a newer load)
-      // must not flip "Loading…" off while that newer request is still in
-      // flight. A skipped/timed-out request keeps the ref, so it still clears.
-      if (fetchAbortRef.current === controller) {
-        fetchAbortRef.current = null;
-        setFetching(false);
-      }
-    }
-  }, [loadPuzzle, previousBoard]);
+    },
+    [store.boards, today, abortInFlight, landed],
+  );
 
-  // Cancel an in-flight today-load so a slow request can't complete later and
-  // hijack the screen the user has since chosen (Skip, Upload, Enter, Demo).
-  const cancelPendingFetch = useCallback(() => {
-    fetchAbortRef.current?.abort(SKIP_REASON);
-  }, []);
-
-  // Act on the launch decision exactly once. "resume" needs no fetch; the
-  // fetch actions all go through loadToday — the swap variant carrying the
-  // stale board so success can move it to the previous slot, the compare
-  // variant carrying the legacy board so the fetched words can settle it.
+  // Act on the launch decision exactly once. "resume" needs no network at all —
+  // the board is already in the store. todayET() is read here rather than the
+  // `today` state so the fetch and the stamp agree even if this mount straddles
+  // ET midnight.
   useEffect(() => {
     if (launch === "resume" || autoLoadedRef.current) return;
     autoLoadedRef.current = true;
-    const opts =
-      launch === "fetch-swap"
-        ? { swapFrom: saved.current }
-        : launch === "fetch-compare"
-          ? { compareFrom: saved.current }
-          : undefined;
-    loadToday(undefined, opts);
-  }, [launch, saved, loadToday]);
-
-  // Cover returns that never reload the page: a tab left open overnight
-  // refocuses with yesterday's board still mounted, and the launch decision
-  // never re-runs. On a visibility change to visible with the board on
-  // screen, pure ET-date math decides whether the board has gone stale; if
-  // so, raise the "Today's puzzle is ready" banner — its action is the only
-  // thing that fetches. Re-raising on every qualifying refocus is deliberate:
-  // a dismissal holds until the next hidden→visible transition. No timers —
-  // a tab that stays continuously visible across ET midnight gets nothing,
-  // because an actively playing user must not be nagged mid-session.
-  useEffect(() => {
-    const onVisibilityChange = () => {
-      if (document.visibilityState !== "visible") return;
-      if (screen !== "board" || !boardMeta) return;
-      if (isStaleDaily(boardMeta, todayET())) setTodayBanner(true);
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
-  }, [screen, boardMeta]);
-
-  // The resume notice's action: lossless swap back to the previous board.
-  // The re-entered board comes back marked chosen-explicitly (it won't be
-  // auto-swapped again) — unless it's today's daily, which stays swappable
-  // so tomorrow's launch still brings the new puzzle; today's board —
-  // including any sorting done since — moves to the previous slot, so
-  // swapping back the other way loses nothing.
-  const resumePrevious = useCallback(() => {
-    if (!previousBoard) return;
-    const next = swapBoards(
-      {
-        current: {
-          tiles,
-          lockedRows,
-          labels,
-          ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
-        },
-        previous: previousBoard,
-      },
-      todayET(),
-    );
-    setPreviousBoard(next.previous);
-    setTiles(next.current.tiles);
-    setLockedRows(next.current.lockedRows);
-    setLabels(next.current.labels);
-    setBoardMeta(metaOf(next.current));
-    setSelected(null);
-    setResumeNotice(null);
-  }, [tiles, lockedRows, labels, boardMeta, previousBoard]);
-
-  // The banner's action: retry the today-load that failed (or was skipped) at
-  // launch, carrying the board on screen as swapFrom so success takes the
-  // exact same path as the launch swap — old board to the previous slot,
-  // today's board with the resume notice. Failure re-lands here, banner up.
-  const retryToday = useCallback(() => {
-    loadToday(undefined, {
-      swapFrom: {
-        tiles,
-        lockedRows,
-        labels,
-        ...(boardMeta ?? { source: "unknown", chosenExplicitly: false }),
-      },
-    });
-  }, [loadToday, tiles, lockedRows, labels, boardMeta]);
+    loadDay(todayET());
+  }, [launch, loadDay]);
 
   const handleTap = useCallback((index) => {
+    // A swap is in flight for 200ms; a tap during it would queue a second swap
+    // against positions that are about to change. Ignore it.
+    if (swapAnim) return;
     const row = Math.floor(index / 4);
     if (lockedRows[row]) return;
     if (selected === null) {
@@ -624,279 +376,92 @@ export default function ConnectionsOrganizer() {
       if (lockedRows[selectedRow]) { setSelected(index); return; }
       setSwapAnim({ a: selected, b: index });
       setTimeout(() => {
-        setTiles(prev => {
-          const next = [...prev];
+        setStore((s) => {
+          // The swap commits after the animation, by which time the player may
+          // have switched days — apply it to the board it was started on, or
+          // not at all.
+          if (s.active !== activeKey) return s;
+          const next = [...s.boards[activeKey].tiles];
           [next[selected], next[index]] = [next[index], next[selected]];
-          return next;
+          return updateActive(s, { tiles: next });
         });
         setSwapAnim(null);
         setSelected(null);
       }, 200);
     }
-  }, [selected, lockedRows]);
+  }, [selected, lockedRows, activeKey, swapAnim]);
 
   const toggleLock = useCallback((rowIdx) => {
     if (!lockedRows[rowIdx]) {
       setFlashRow(rowIdx);
       setTimeout(() => setFlashRow(null), 600);
     }
-    setLockedRows(prev => {
-      const next = [...prev];
+    setStore((s) => {
+      const active = s.active && s.boards[s.active];
+      if (!active) return s;
+      const next = [...active.lockedRows];
       next[rowIdx] = !next[rowIdx];
-      return next;
+      return updateActive(s, { lockedRows: next });
     });
   }, [lockedRows]);
 
   const updateLabel = useCallback((rowIdx, val) => {
-    setLabels(prev => {
-      const next = [...prev];
+    setStore((s) => {
+      const active = s.active && s.boards[s.active];
+      if (!active) return s;
+      const next = [...active.labels];
       next[rowIdx] = val;
-      return next;
+      return updateActive(s, { labels: next });
     });
   }, []);
 
   const resetBoard = useCallback(() => {
-    setLockedRows([false, false, false, false]);
-    setLabels(["", "", "", ""]);
+    setStore(resetActive);
     setSelected(null);
   }, []);
 
   const shuffleUnlocked = useCallback(() => {
-    setTiles(prev => {
-      const next = [...prev];
+    setStore((s) => {
+      const active = s.active && s.boards[s.active];
+      if (!active) return s;
+      const next = [...active.tiles];
       const unlocked = [];
       for (let i = 0; i < 16; i++) {
-        if (!lockedRows[Math.floor(i / 4)]) unlocked.push(i);
+        if (!active.lockedRows[Math.floor(i / 4)]) unlocked.push(i);
       }
       for (let i = unlocked.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [next[unlocked[i]], next[unlocked[j]]] = [next[unlocked[j]], next[unlocked[i]]];
       }
-      return next;
+      return updateActive(s, { tiles: next });
     });
     setSelected(null);
-  }, [lockedRows]);
+  }, []);
 
-  if (screen === "loading") {
-    return (
-      <main style={styles.container}>
-        <header style={styles.header}>
-          <div style={styles.colorDots} aria-hidden="true">
-            {ROW_COLORS.map((c, i) => (
-              <span key={i} style={{ ...styles.dot, background: c.bg }} />
-            ))}
-          </div>
-          <h1 style={styles.title}>Connections Sorter</h1>
-        </header>
-        <div style={styles.loadingWrap}>
-          <div style={styles.spinner} aria-hidden="true" />
-          <p style={styles.loadingText} role="status">Loading today's puzzle…</p>
-          <button
-            className="ghost-btn"
-            style={styles.linkBtn}
-            onClick={() => {
-              autoLoadedRef.current = true;
-              cancelPendingFetch();
-              // Skipping a stale-board load lands on the old board (it's a
-              // perfectly good one) under the "Today's puzzle is ready"
-              // banner. Everything else — including fetch-compare, where a
-              // board sits in state but its identity is unsettled, so
-              // neither the banner's claim nor a silent resume would be
-              // honest — goes to the menu. Skipping a compare launch does
-              // strand that board until reload (legacy saves have no
-              // previous slot, so no resume card): connections-5ei tracks
-              // whether that's the right call.
-              if (launch === "fetch-swap") {
-                setTodayBanner(true);
-                setScreen("board");
-              } else {
-                setScreen("menu");
-              }
-            }}
-          >
-            Skip — start another way
-          </button>
-        </div>
-      </main>
-    );
-  }
+  const openOverflow = useCallback(() => {
+    setOverflowOpen(true);
+    overflowRef.current?.showModal();
+    // showModal() focuses the first focusable item, which is Reset — making a
+    // destructive action the keyboard default (Enter, Enter). Land on the
+    // first harmless item instead; the PRD pins Reset at the top of the list.
+    manualItemRef.current?.focus();
+  }, []);
 
-  if (screen === "menu") {
-    return (
-      <main style={styles.container}>
-        <header style={styles.header}>
-          <div style={styles.colorDots} aria-hidden="true">
-            {ROW_COLORS.map((c, i) => (
-              <span key={i} style={{ ...styles.dot, background: c.bg }} />
-            ))}
-          </div>
-          <h1 style={styles.title}>Connections Sorter</h1>
-          <p style={styles.tagline}>
-            A scratchpad for the NYT Connections puzzle. Group your guesses
-            into rows, then lock them in before you submit.
-          </p>
-        </header>
+  // Native <dialog> owns dismissal (Escape and backdrop both fire `close`,
+  // which resets aria-expanded via onClose). Closing from an item that also
+  // navigates away — "Enter words manually" unmounts the dialog in the same
+  // flush — would lose that event, so the state is reset here too.
+  const closeOverflow = useCallback(() => {
+    setOverflowOpen(false);
+    overflowRef.current?.close();
+  }, []);
 
-        <div style={styles.previewGrid} aria-hidden="true">
-          {ROW_COLORS.map((c, rowIdx) => (
-            <div key={rowIdx} style={styles.previewRow}>
-              {[0, 1, 2, 3].map(colIdx => (
-                <div
-                  key={colIdx}
-                  style={{ ...styles.previewTile, background: c.bg }}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-
-        <nav style={styles.menuCards} aria-label="Start a puzzle">
-          <button
-            className="menu-card"
-            style={{ ...styles.menuCard, ...styles.menuCardPrimary }}
-            onClick={() => loadToday()}
-            disabled={fetching}
-            aria-label="Load today's Connections puzzle words"
-          >
-            <div style={styles.menuCardInner}>
-              <span style={styles.menuIcon} aria-hidden="true">📅</span>
-              <div>
-                <span style={{ ...styles.menuLabel, color: "var(--primary-text)" }}>
-                  {fetching ? "Loading…" : "Today's Puzzle"}
-                </span>
-                <span style={{ ...styles.menuDesc, color: "var(--primary-text-muted)" }}>
-                  Load today's 16 words automatically
-                </span>
-              </div>
-            </div>
-          </button>
-
-          <div style={styles.chipRow} role="group" aria-label="Load a recent puzzle">
-            {buildRecentDates().slice(1).map(({ date, label }) => (
-              <button
-                key={date}
-                className="chip"
-                style={styles.chip}
-                onClick={() => loadToday(date)}
-                disabled={fetching}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {fetchError && <p style={styles.error}>{fetchError}</p>}
-
-          {previousBoard && (
-            <button
-              className="menu-card"
-              style={styles.menuCard}
-              onClick={() => {
-                cancelPendingFetch();
-                resumePrevious();
-                setScreen("board");
-              }}
-              aria-label="Resume your previous board"
-            >
-              <div style={styles.menuCardInner}>
-                <span style={styles.menuIcon} aria-hidden="true">↩</span>
-                <div>
-                  <span style={styles.menuLabel}>Resume previous board</span>
-                  <span style={styles.menuDesc}>
-                    {boardSummary(previousBoard, todayET())}
-                  </span>
-                </div>
-              </div>
-            </button>
-          )}
-
-          <button
-            className="menu-card"
-            style={styles.menuCard}
-            onClick={() => { cancelPendingFetch(); setScreen("upload"); }}
-            aria-label="Upload a screenshot of a Connections puzzle"
-          >
-            <div style={styles.menuCardInner}>
-              <span style={styles.menuIcon} aria-hidden="true">📷</span>
-              <div>
-                <span style={styles.menuLabel}>Upload Screenshot</span>
-                <span style={styles.menuDesc}>Read words from a puzzle image</span>
-              </div>
-            </div>
-          </button>
-          <button
-            className="menu-card"
-            style={styles.menuCard}
-            onClick={() => { cancelPendingFetch(); setManualSource("manual"); setScreen("manual"); }}
-            aria-label="Type or paste the sixteen puzzle words"
-          >
-            <div style={styles.menuCardInner}>
-              <span style={styles.menuIcon} aria-hidden="true">✏️</span>
-              <div>
-                <span style={styles.menuLabel}>Enter Words</span>
-                <span style={styles.menuDesc}>Type or paste 16 words</span>
-              </div>
-            </div>
-          </button>
-          <button
-            className="menu-card"
-            style={styles.menuCard}
-            onClick={() => {
-              cancelPendingFetch();
-              loadPuzzle(shuffled(DEMO_PUZZLE_WORDS), { source: "demo", chosenExplicitly: false });
-            }}
-            aria-label="Try a sample puzzle to see how the app works"
-          >
-            <div style={styles.menuCardInner}>
-              <span style={styles.menuIcon} aria-hidden="true">🎯</span>
-              <div>
-                <span style={styles.menuLabel}>Try Demo Puzzle</span>
-                <span style={styles.menuDesc}>See how it works with a sample</span>
-              </div>
-            </div>
-          </button>
-        </nav>
-
-        <section style={styles.howItWorks} aria-labelledby="how-heading">
-          <h2 id="how-heading" style={styles.howHeading}>How it works</h2>
-          <ol style={styles.howList}>
-            <li>Today's words load automatically — or upload a screenshot, type them, or try the demo.</li>
-            <li>Tap two tiles to swap them. Group words you think share a category into the same row.</li>
-            <li>Lock rows you're confident in, then enter your guesses on the official NYT game.</li>
-          </ol>
-        </section>
-
-        <footer style={styles.disclaimer}>
-          <a
-            href={OFFICIAL_GAME_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={styles.officialLink}
-          >
-            Play the official NYT Connections ↗
-          </a>
-          <p style={styles.disclaimerText}>
-            An independent helper — not affiliated with, endorsed by, or sponsored by
-            The New York Times.
-          </p>
-        </footer>
-      </main>
-    );
-  }
-
-  if (screen === "upload") {
-    return (
-      <UploadScreen
-        onCancel={() => setScreen("menu")}
-        onWords={(text) => {
-          setManualText(text);
-          setManualSource("ocr");
-          setError(null);
-          setScreen("manual");
-        }}
-      />
-    );
-  }
+  // A click that lands on the dialog element itself (rather than its padded
+  // inner box) came from the backdrop — the platform gives ::backdrop no node
+  // of its own, so this is the standard way to close on an outside tap.
+  const onDialogClick = useCallback((event) => {
+    if (event.target === event.currentTarget) event.currentTarget.close();
+  }, []);
 
   if (screen === "manual") {
     return (
@@ -910,56 +475,126 @@ export default function ConnectionsOrganizer() {
           rows={10}
           placeholder={"CHEESE\nMAGIC WAND\nSOCKET\nDONKEY\nGREEN CHEESE\nECLIPSE\nTHIMBLE\nEASY ANSWER\nTIDE\nPANACEA\nBOOT\nWEREWOLF\nPLAYING CARD\nIRON\nTOP HAT\nSILVER BULLET"}
           value={manualText}
-          onChange={(e) => { setManualText(e.target.value); setError(null); }}
+          onChange={(e) => { setManualText(e.target.value); setManualError(null); }}
           autoFocus
         />
         <div style={styles.btnRow}>
-          <button className="btn btn-secondary" style={styles.btnSecondary} onClick={() => { setScreen("menu"); setError(null); }}>Back</button>
+          <button
+            className="btn btn-secondary"
+            style={styles.btnSecondary}
+            onClick={() => { setScreen("board"); setManualError(null); }}
+          >
+            Back
+          </button>
           <button className="btn btn-primary" style={styles.btnPrimary} onClick={() => {
             const parsed = parseTiles(manualText);
             if (parsed) {
-              loadPuzzle(parsed, { source: manualSource, chosenExplicitly: false });
+              // Typed words replace the single custom board and become the
+              // board on screen. todayET() at call time: the stamp is what ages
+              // this board out of the window later.
+              abortInFlight();
+              setStore((s) => setCustom(s, parsed, todayET()));
+              landed();
+              setScreen("board");
             } else {
               const count = manualText.split(/[,\n]+/).map(w => w.trim()).filter(Boolean).length;
-              setError("Found " + count + " words — need exactly 16.");
+              setManualError("Found " + count + " words — need exactly 16.");
             }
           }}>Load Puzzle</button>
         </div>
-        {error && <p style={styles.error}>{error}</p>}
+        {manualError && <p style={styles.error}>{manualError}</p>}
       </div>
     );
   }
 
-  // Which day's puzzle the board holds — "Today", "Fri, Jun 5", or null for
-  // boards with no trusted date (OCR/manual/demo/legacy), which show nothing.
-  const boardDateText = dateLabel(boardMeta?.date, todayET());
+  const loadingDay = fetchingKey ? possessiveDay(fetchingKey, today) : null;
 
   return (
     <div style={styles.container}>
+      {/* The board is the whole app, so its name lives in the document title
+          and here for assistive tech rather than taking up a header row. */}
+      <h1 className="sr-only">Connections Sorter</h1>
+
       <div style={styles.boardHeader}>
-        <button className="ghost-btn" style={styles.backBtn} onClick={() => setScreen("menu")}>← Menu</button>
-        {boardDateText && <span style={styles.boardDateLabel}>{boardDateText}</span>}
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn small-btn" style={styles.smallBtn} onClick={shuffleUnlocked}>Shuffle</button>
-          <button className="btn small-btn" style={styles.smallBtn} onClick={resetBoard}>Reset</button>
+        {/* Segment styling (including the four-segment dense variant) lives in
+            index.css: inline styles can't express a modifier class, and the
+            dense padding is what keeps four segments on one row at 320px. */}
+        <div
+          ref={segsRef}
+          className={entries.length > 3 ? "segs segs-dense" : "segs"}
+          role="group"
+          aria-label="Puzzle day"
+        >
+          {entries.map((entry) => {
+            const isActive = activeKey === entry.key && !launching;
+            const isLoading = fetchingKey === entry.key;
+            const locks = entry.lockedCount === 1 ? "1 group locked" : `${entry.lockedCount} groups locked`;
+            // The weekday segments are labelled with the head of their own date
+            // text ("Fri" / "Fri, Aug 14"), so prefixing there would announce
+            // "Fri, Fri, Aug 14". Only prefix when the label adds something.
+            const spoken = entry.dateText.startsWith(entry.label)
+              ? entry.dateText
+              : `${entry.label}, ${entry.dateText}`;
+            return (
+              <button
+                key={entry.key}
+                className="seg"
+                aria-pressed={isActive}
+                aria-label={entry.lockedCount > 0 ? `${spoken}, ${locks}` : spoken}
+                onClick={() => loadDay(entry.key)}
+              >
+                {entry.label}
+                {/* The dot marks days you have a board on but aren't looking
+                    at — the resume affordance. On the active segment it would
+                    only restate the fill. */}
+                {isLoading ? (
+                  <span className="seg-spin" aria-hidden="true" />
+                ) : entry.started && !isActive ? (
+                  <span className="seg-dot" aria-hidden="true" />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={styles.headerActions}>
+          <button
+            className="btn small-btn"
+            onClick={shuffleUnlocked}
+            disabled={!board}
+          >
+            Shuffle
+          </button>
+          <button
+            className="btn small-btn icon-btn"
+            onClick={openOverflow}
+            aria-label="More options"
+            aria-haspopup="dialog"
+            aria-expanded={overflowOpen}
+          >
+            ⋯
+          </button>
         </div>
       </div>
 
-      {todayBanner && (
+      {/* A failed switch keeps the current board and says so in one line. With
+          no board on screen the same failure renders inside the empty state
+          below instead. */}
+      {board && loadError && (
         <div className="notice" style={styles.notice} role="status">
-          <span>Today's puzzle is ready —</span>
+          <span>{loadError.message}</span>
           <button
             className="ghost-btn"
             style={styles.noticeAction}
-            onClick={retryToday}
-            disabled={fetching}
+            onClick={() => loadDay(loadError.key)}
+            disabled={fetchingKey !== null}
           >
-            {fetching ? "Loading…" : "Play today's puzzle"}
+            Retry
           </button>
           <button
             className="ghost-btn"
             style={styles.noticeDismiss}
-            onClick={() => setTodayBanner(false)}
+            onClick={() => setLoadError(null)}
             aria-label="Dismiss"
           >
             ✕
@@ -967,353 +602,248 @@ export default function ConnectionsOrganizer() {
         </div>
       )}
 
-      {resumeNotice && (
-        <div className="notice" style={styles.notice} role="status">
-          <span>Loaded today's puzzle.</span>
-          <button className="ghost-btn" style={styles.noticeAction} onClick={resumePrevious}>
-            ↩ {weekdayLong(resumeNotice.date)
-              ? `Resume ${weekdayLong(resumeNotice.date)}'s board`
-              : "Resume previous board"}
-          </button>
-          <button
-            className="ghost-btn"
-            style={styles.noticeDismiss}
-            onClick={() => setResumeNotice(null)}
-            aria-label="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      {board ? (
+        // Keyed by the active board so switching days replays the staggered
+        // entrance instead of swapping words in place.
+        <div key={activeKey} style={styles.grid}>
+          {[0, 1, 2, 3].map(rowIdx => {
+            const locked = lockedRows[rowIdx];
+            const flashing = flashRow === rowIdx;
+            const color = ROW_COLORS[rowIdx];
 
-      <div style={styles.grid}>
-        {[0, 1, 2, 3].map(rowIdx => {
-          const locked = lockedRows[rowIdx];
-          const flashing = flashRow === rowIdx;
-          const color = ROW_COLORS[rowIdx];
+            return (
+              <div key={rowIdx}>
+                <div style={styles.rowControl}>
+                  <button
+                    className="btn"
+                    style={{
+                      ...styles.lockBtn,
+                      background: locked ? color.bg : "transparent",
+                      color: locked ? color.text : "var(--text-muted)",
+                      borderColor: locked ? color.bg : "var(--border-strong)",
+                      fontWeight: locked ? 800 : 600,
+                    }}
+                    onClick={() => toggleLock(rowIdx)}
+                  >
+                    {locked ? "✓ " + color.name : "○ " + color.name}
+                  </button>
+                  <input
+                    style={{
+                      ...styles.labelInput,
+                      borderColor: locked ? `${color.bg}aa` : "var(--border)",
+                      background: locked ? `${color.bg}22` : "var(--input-bg)",
+                      // Once locked, the row is settled — let its label recede so
+                      // the lock button + colored tiles carry the row.
+                      color: locked ? "var(--text-soft)" : "var(--text)",
+                      opacity: locked ? 0.75 : 1,
+                    }}
+                    placeholder="Category label…"
+                    value={labels[rowIdx]}
+                    onChange={(e) => updateLabel(rowIdx, e.target.value)}
+                  />
+                </div>
 
-          return (
-            <div key={rowIdx}>
-              <div style={styles.rowControl}>
-                <button
-                  className="btn"
-                  style={{
-                    ...styles.lockBtn,
-                    background: locked ? color.bg : "transparent",
-                    color: locked ? color.text : "var(--text-muted)",
-                    borderColor: locked ? color.bg : "var(--border-strong)",
-                    fontWeight: locked ? 800 : 600,
-                  }}
-                  onClick={() => toggleLock(rowIdx)}
-                >
-                  {locked ? "✓ " + color.name : "○ " + color.name}
-                </button>
-                <input
-                  style={{
-                    ...styles.labelInput,
-                    borderColor: locked ? `${color.bg}aa` : "var(--border)",
-                    background: locked ? `${color.bg}22` : "var(--input-bg)",
-                    // Once locked, the row is settled — let its label recede so
-                    // the lock button + colored tiles carry the row.
-                    color: locked ? "var(--text-soft)" : "var(--text)",
-                    opacity: locked ? 0.75 : 1,
-                  }}
-                  placeholder="Category label…"
-                  value={labels[rowIdx]}
-                  onChange={(e) => updateLabel(rowIdx, e.target.value)}
-                />
-              </div>
+                <div style={styles.tileRow}>
+                  {[0, 1, 2, 3].map(colIdx => {
+                    const idx = rowIdx * 4 + colIdx;
+                    const isSelected = selected === idx;
+                    const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
+                    const word = tiles[idx] || "";
+                    // Cascade the entrance top-left → bottom-right, capped so the
+                    // last tile doesn't lag noticeably behind the first.
+                    const revealDelay = Math.min(idx * 22, 330);
 
-              <div style={styles.tileRow}>
-                {[0, 1, 2, 3].map(colIdx => {
-                  const idx = rowIdx * 4 + colIdx;
-                  const isSelected = selected === idx;
-                  const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
-                  const word = tiles[idx] || "";
-                  // Cascade the entrance top-left → bottom-right, capped so the
-                  // last tile doesn't lag noticeably behind the first.
-                  const revealDelay = Math.min(idx * 22, 330);
+                    // Precedence mirrors the original: locked fill wins over the
+                    // selected (picked-up) state; flashing only deepens a locked
+                    // tile's glow. Colors flow through CSS vars so the board
+                    // tracks the light/dark theme automatically.
+                    let bg, fg, borderColor, boxShadow;
+                    if (locked) {
+                      bg = color.bg;
+                      fg = color.text;
+                      borderColor = "transparent";
+                      boxShadow = flashing
+                        ? `0 0 0 1px ${color.bg}, 0 8px 26px ${color.glow}, 0 0 32px ${color.glow}`
+                        : `0 2px 8px ${color.glow}`;
+                    } else if (isSelected) {
+                      bg = "var(--selected-bg)";
+                      fg = "var(--selected-text)";
+                      borderColor = "transparent";
+                      boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
+                    } else {
+                      bg = "var(--tile-bg)";
+                      fg = "var(--tile-text)";
+                      borderColor = "var(--tile-border)";
+                      boxShadow = "var(--tile-shadow)";
+                    }
+                    // Selected tiles lift (you "pick them up"); the partner tile
+                    // tucks during the swap. Resting and locked tiles get no
+                    // inline transform so the CSS `.tile:hover` lift can apply
+                    // (an inline transform would always win over it).
+                    const liftTransform = isSelected
+                      ? "scale(1.05)"
+                      : isSwapping
+                      ? "scale(0.9)"
+                      : undefined;
 
-                  // Precedence mirrors the original: locked fill wins over the
-                  // selected (picked-up) state; flashing only deepens a locked
-                  // tile's glow. Colors flow through CSS vars so the board
-                  // tracks the light/dark theme automatically.
-                  let bg, fg, borderColor, boxShadow;
-                  if (locked) {
-                    bg = color.bg;
-                    fg = color.text;
-                    borderColor = "transparent";
-                    boxShadow = flashing
-                      ? `0 0 0 1px ${color.bg}, 0 8px 26px ${color.glow}, 0 0 32px ${color.glow}`
-                      : `0 2px 8px ${color.glow}`;
-                  } else if (isSelected) {
-                    bg = "var(--selected-bg)";
-                    fg = "var(--selected-text)";
-                    borderColor = "transparent";
-                    boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
-                  } else {
-                    bg = "var(--tile-bg)";
-                    fg = "var(--tile-text)";
-                    borderColor = "var(--tile-border)";
-                    boxShadow = "var(--tile-shadow)";
-                  }
-                  // Selected tiles lift (you "pick them up"); the partner tile
-                  // tucks during the swap. Resting and locked tiles get no
-                  // inline transform so the CSS `.tile:hover` lift can apply
-                  // (an inline transform would always win over it).
-                  const liftTransform = isSelected
-                    ? "scale(1.05)"
-                    : isSwapping
-                    ? "scale(0.9)"
-                    : undefined;
-
-                  return (
-                    <div
-                      key={idx}
-                      className="reveal"
-                      style={{ ...styles.tileCell, animationDelay: `${revealDelay}ms` }}
-                    >
-                      <button
-                        className="tile"
-                        ref={el => (tileRefs.current[idx] = el)}
-                        onClick={() => handleTap(idx)}
-                        style={{
-                          ...styles.tile,
-                          background: bg,
-                          color: fg,
-                          borderColor,
-                          // fontSize is owned by fitTileFont (DOM-measured),
-                          // not React, so it isn't reset on re-render.
-                          transform: liftTransform,
-                          boxShadow,
-                          animation: flashing ? "lockPop 0.45s ease" : "none",
-                        }}
+                    return (
+                      <div
+                        key={idx}
+                        className="reveal"
+                        style={{ ...styles.tileCell, animationDelay: `${revealDelay}ms` }}
                       >
-                        {word}
-                      </button>
-                    </div>
-                  );
-                })}
+                        <button
+                          className="tile"
+                          ref={el => (tileRefs.current[idx] = el)}
+                          onClick={() => handleTap(idx)}
+                          style={{
+                            ...styles.tile,
+                            background: bg,
+                            color: fg,
+                            borderColor,
+                            // fontSize is owned by fitTileFont (DOM-measured),
+                            // not React, so it isn't reset on re-render.
+                            transform: liftTransform,
+                            boxShadow,
+                            animation: flashing ? "lockPop 0.45s ease" : "none",
+                          }}
+                        >
+                          {word}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <p style={styles.boardHint}>
-        {selected !== null
-          ? "↑ Tap another tile to swap"
-          : "Tap a tile to select, then another to swap"}
-      </p>
-    </div>
-  );
-}
-
-function UploadScreen({ onCancel, onWords }) {
-  const [file, setFile] = useState(null);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [stage, setStage] = useState("");
-  const [error, setError] = useState(null);
-  const [clipboardSupported] = useState(hasClipboardReadSupport);
-  const inputRef = useRef(null);
-
-  // Revoke object URL when the preview changes or unmounts
-  useEffect(() => {
-    if (!previewUrl) return undefined;
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
-
-  const pickFile = useCallback((f) => {
-    if (!f) return;
-    if (!f.type.startsWith("image/")) {
-      setError("Please choose an image file.");
-      return;
-    }
-    setFile(f);
-    setPreviewUrl(URL.createObjectURL(f));
-    setError(null);
-  }, []);
-
-  const pasteFromClipboard = async () => {
-    if (running) return;
-    try {
-      const items = await navigator.clipboard.read();
-      const result = await extractClipboardImage(items);
-      if (result.kind === "ok") {
-        pickFile(result.blob);
-      } else {
-        setError(CLIPBOARD_ERROR_MESSAGES[result.kind]);
-      }
-    } catch (err) {
-      console.warn("clipboard paste:", err);
-      setError(CLIPBOARD_ERROR_MESSAGES.error);
-    }
-  };
-
-  // Window-level Cmd/Ctrl+V handler for the desktop keyboard shortcut. The
-  // on-screen "Paste from clipboard" button goes through `pasteFromClipboard`
-  // above (using `navigator.clipboard.read()`), which is the path iOS uses —
-  // iOS Safari won't fire `paste` on window unless an editable element is
-  // focused. We also bail if the user is pasting *into* an editable element so
-  // we don't hijack a real text paste.
-  useEffect(() => {
-    const handlePaste = async (event) => {
-      if (running) return;
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest("input, textarea, [contenteditable]")
-      ) {
-        return;
-      }
-      try {
-        const result = await extractClipboardImage(event.clipboardData?.items);
-        if (result.kind === "ok") {
-          pickFile(result.blob);
-        } else {
-          setError(CLIPBOARD_ERROR_MESSAGES[result.kind]);
-        }
-      } catch (err) {
-        console.warn("clipboard paste:", err);
-        setError(CLIPBOARD_ERROR_MESSAGES.error);
-      }
-    };
-    window.addEventListener("paste", handlePaste);
-    return () => window.removeEventListener("paste", handlePaste);
-  }, [running, pickFile]);
-
-  const runOcr = async () => {
-    if (!file) return;
-    setRunning(true);
-    setProgress(0);
-    setStage("Loading OCR engine…");
-    setError(null);
-    let worker;
-    try {
-      const { createWorker } = await import("tesseract.js");
-      worker = await createWorker("eng", 1, {
-        // Self-host worker, core WASM, and language data — the defaults fetch
-        // from jsDelivr/tessdata, which can fail in production with opaque
-        // NetworkError inside the blob worker. See scripts/copy-tesseract-assets.mjs.
-        workerPath: "/tesseract/worker.min.js",
-        corePath: "/tesseract",
-        langPath: "/tesseract",
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            setStage("Reading text…");
-            setProgress(Math.round(m.progress * 100));
-          } else if (m.status) {
-            setStage(m.status[0].toUpperCase() + m.status.slice(1) + "…");
-          }
-        },
-      });
-      // Allow both cases so Tesseract isn't fighting its own model — we
-      // uppercase in post. Period and ampersand are needed for tiles like
-      // "CHUCK E." and "AT&T"; digits are excluded so footers like
-      // "3 mistakes remaining" don't pollute the output.
-      await worker.setParameters({
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '-.&",
-        preserve_interword_spaces: "1",
-      });
-      const { data } = await worker.recognize(file, {}, { text: true, blocks: true });
-      const tiles = reconstructTilesFromBboxes(gatherWords(data.blocks));
-      const lines = tiles ?? extractWordsFromOcr(data.text);
-      if (lines.length === 0) {
-        setError("No words detected. Try a clearer crop of just the puzzle grid.");
-        return;
-      }
-      onWords(lines.join("\n"));
-    } catch (e) {
-      setError("OCR failed: " + (e?.message || "unknown error"));
-    } finally {
-      if (worker) {
-        try { await worker.terminate(); } catch { /* ignore */ }
-      }
-      setRunning(false);
-    }
-  };
-
-  return (
-    <div style={styles.container}>
-      <div style={{ ...styles.header, paddingTop: 12, paddingBottom: 0 }}>
-        <h1 style={{ ...styles.title, fontSize: 20 }}>Upload Screenshot</h1>
-        <p style={styles.subtitle}>Crop tightly to the 4×4 grid for best results</p>
-      </div>
-
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        style={{ display: "none" }}
-        onChange={(e) => pickFile(e.target.files?.[0])}
-      />
-
-      {!previewUrl ? (
-        <div style={styles.dropzoneStack}>
-          <button
-            className="menu-card"
-            style={styles.dropzone}
-            onClick={() => inputRef.current?.click()}
-          >
-            <span style={{ fontSize: 32, lineHeight: 1 }}>📷</span>
-            <span style={styles.menuLabel}>Choose an image</span>
-            <span style={styles.menuDesc}>PNG or JPG of your Connections grid</span>
-          </button>
-          {clipboardSupported && (
-            <button
-              className="menu-card"
-              style={styles.dropzone}
-              onClick={pasteFromClipboard}
-              disabled={running}
-            >
-              <span style={{ fontSize: 32, lineHeight: 1 }}>📋</span>
-              <span style={styles.menuLabel}>Paste from clipboard</span>
-              <span style={styles.menuDesc}>From a screenshot you copied</span>
-            </button>
-          )}
+            );
+          })}
         </div>
       ) : (
-        <div style={styles.previewWrap}>
-          <img src={previewUrl} alt="Puzzle preview" style={styles.previewImg} />
-          <button
-            className="btn small-btn"
-            style={{ ...styles.smallBtn, alignSelf: "center", marginTop: 8 }}
-            onClick={() => inputRef.current?.click()}
-            disabled={running}
-          >
-            Choose a different image
-          </button>
+        // No board on screen: the launch fetch is still running, or it failed
+        // and this is the only thing the app can offer. Same footprint as the
+        // grid so the header doesn't jump when the words arrive.
+        <div style={styles.emptyWrap}>
+          {/* A retry from here puts the spinner back, so the failure message
+              never sits above a button that looks like it did nothing. */}
+          {loadError && !fetchingKey ? (
+            <>
+              <p style={styles.emptyText} role="status">{loadError.message}.</p>
+              <button
+                className="btn small-btn"
+                onClick={() => loadDay(loadError.key)}
+              >
+                Retry
+              </button>
+              <button
+                className="ghost-btn"
+                style={styles.linkBtn}
+                onClick={() => setScreen("manual")}
+              >
+                or enter the words yourself
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={styles.spinner} aria-hidden="true" />
+              <p style={styles.emptyText} role="status">
+                Loading {loadingDay ?? "today's"} puzzle…
+              </p>
+            </>
+          )}
         </div>
       )}
 
-      {running && (
-        <div style={styles.progressWrap}>
-          <div style={styles.progressBar}>
-            <div style={{ ...styles.progressFill, width: progress + "%" }} />
-          </div>
-          <p style={styles.progressLabel}>{stage} {progress > 0 && progress + "%"}</p>
-        </div>
+      {board && (
+        <p style={styles.boardHint}>
+          {selected !== null
+            ? "↑ Tap another tile to swap"
+            : "Tap a tile to select, then another to swap"}
+        </p>
       )}
 
-      <div style={styles.btnRow}>
-        <button className="btn btn-secondary" style={styles.btnSecondary} onClick={onCancel} disabled={running}>Back</button>
-        <button
-          className="btn btn-primary"
-          style={{ ...styles.btnPrimary, opacity: file && !running ? 1 : 0.5 }}
-          onClick={runOcr}
-          disabled={!file || running}
+      <footer style={styles.footer}>
+        Connections Sorter is an independent helper, not affiliated with The New
+        York Times ·{" "}
+        <a
+          className="footer-link"
+          style={styles.footerLink}
+          href={OFFICIAL_GAME_URL}
+          target="_blank"
+          rel="noopener noreferrer"
         >
-          {running ? "Reading…" : "Extract Words"}
-        </button>
-      </div>
+          Play the official game ↗
+        </a>
+      </footer>
 
-      {error && <p style={styles.error}>{error}</p>}
+      {/* Everything that isn't sorting tiles. A native <dialog> so Escape, the
+          backdrop, focus trapping and inertness come from the platform rather
+          than from hand-rolled key handlers. */}
+      <dialog
+        ref={overflowRef}
+        className="sheet"
+        aria-label="More options"
+        onClick={onDialogClick}
+        onClose={() => setOverflowOpen(false)}
+      >
+        <div className="sheet-body">
+          <button
+            className="sheet-item sheet-item-danger"
+            onClick={() => { closeOverflow(); resetBoard(); }}
+            disabled={!board}
+          >
+            Reset board
+            <span className="sheet-hint">Clears locks and labels</span>
+          </button>
+          <button
+            ref={manualItemRef}
+            className="sheet-item"
+            onClick={() => { closeOverflow(); setScreen("manual"); }}
+          >
+            Enter words manually
+          </button>
+          <button
+            className="sheet-item"
+            onClick={() => { closeOverflow(); howRef.current?.showModal(); }}
+          >
+            How this works
+          </button>
+          <a
+            className="sheet-item"
+            href={OFFICIAL_GAME_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={closeOverflow}
+          >
+            Play the official NYT Connections ↗
+          </a>
+        </div>
+        <button className="sheet-close" onClick={closeOverflow}>Cancel</button>
+      </dialog>
 
-      <p style={styles.hint}>
-        OCR runs entirely in your browser — no images leave your device.
-      </p>
+      <dialog
+        ref={howRef}
+        className="sheet"
+        aria-labelledby="how-heading"
+        onClick={onDialogClick}
+      >
+        <div className="sheet-body sheet-prose">
+          <div style={styles.colorDots} aria-hidden="true">
+            {ROW_COLORS.map((c, i) => (
+              <span key={i} style={{ ...styles.dot, background: c.bg }} />
+            ))}
+          </div>
+          <h2 id="how-heading" style={styles.howHeading}>How this works</h2>
+          <ol style={styles.howList}>
+            <li>Today's words load automatically. Switch to yesterday's or the day before from the header.</li>
+            <li>Tap two tiles to swap them. Group words you think share a category into the same row.</li>
+            <li>Lock rows you're confident in, then enter your guesses on the official NYT game.</li>
+          </ol>
+          <p style={styles.howNote}>
+            Nothing leaves your device except the request for the day's words.
+          </p>
+        </div>
+        <button className="sheet-close" onClick={() => howRef.current?.close()}>Close</button>
+      </dialog>
     </div>
   );
 }
@@ -1336,7 +866,6 @@ const styles = {
   },
   colorDots: {
     display: "flex",
-    justifyContent: "center",
     gap: 6,
     marginBottom: 12,
   },
@@ -1359,300 +888,20 @@ const styles = {
     marginTop: 4,
     fontWeight: 500,
   },
-  tagline: {
-    fontSize: 15,
-    color: "var(--text-soft)",
-    margin: "10px auto 0",
-    fontWeight: 500,
-    lineHeight: 1.45,
-    maxWidth: 380,
-  },
-  previewGrid: {
-    display: "grid",
-    gridTemplateRows: "repeat(4, 1fr)",
-    gap: 6,
-    width: "min(260px, 80%)",
-    margin: "22px auto 0",
-    padding: 10,
-    background: "var(--surface)",
-    border: "1px solid var(--border)",
-    borderRadius: 16,
-    boxShadow: "var(--card-shadow)",
-  },
-  previewRow: {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
-    gap: 6,
-  },
-  previewTile: {
-    aspectRatio: "1 / 1",
-    borderRadius: 8,
-  },
-  howItWorks: {
-    marginTop: 28,
-    padding: "16px 18px",
-    background: "var(--surface)",
-    border: "1px solid var(--border)",
-    borderRadius: 16,
-    boxShadow: "var(--card-shadow)",
-  },
-  howHeading: {
-    fontSize: 12,
-    fontWeight: 700,
-    color: "var(--text-muted)",
-    letterSpacing: "1px",
-    textTransform: "uppercase",
-    margin: 0,
-  },
-  howList: {
-    fontSize: 14,
-    color: "var(--text-soft)",
-    lineHeight: 1.5,
-    margin: "10px 0 0",
-    paddingLeft: 22,
-  },
-  menuCards: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-    marginTop: 28,
-  },
-  menuCard: {
-    display: "flex",
-    padding: "16px 18px",
-    background: "var(--surface)",
-    border: "1px solid var(--border)",
-    borderRadius: 16,
-    cursor: "pointer",
-    textAlign: "left",
-    boxShadow: "var(--card-shadow)",
-    fontFamily: "var(--font)",
-    color: "var(--text)",
-    WebkitTapHighlightColor: "transparent",
-  },
-  menuCardInner: {
-    display: "flex",
-    alignItems: "center",
-    gap: 14,
-  },
-  menuIcon: {
-    fontSize: 24,
-    lineHeight: 1,
-  },
-  menuLabel: {
-    display: "block",
-    fontSize: 16,
-    fontWeight: 700,
-    color: "var(--text)",
-  },
-  menuDesc: {
-    display: "block",
-    fontSize: 13,
-    color: "var(--text-muted)",
-    marginTop: 1,
-  },
-  menuCardPrimary: {
-    background: "var(--primary)",
-    border: "1px solid var(--primary)",
-    // The auto-load default path — give it a little extra height and lift so it
-    // sits above the secondary cards rather than reading as one of a flat list.
-    padding: "19px 18px",
-    boxShadow: "0 3px 8px rgba(40, 37, 26, 0.10), 0 12px 28px rgba(40, 37, 26, 0.14)",
-  },
-  chipRow: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 6,
-    marginTop: -4,
-  },
-  chip: {
-    padding: "6px 13px",
-    fontSize: 12.5,
-    fontWeight: 600,
-    background: "var(--surface)",
-    color: "var(--text-muted)",
-    border: "1px solid var(--border)",
-    borderRadius: 999,
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-    WebkitTapHighlightColor: "transparent",
-  },
-  loadingWrap: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 14,
-    marginTop: 64,
-  },
-  spinner: {
-    width: 34,
-    height: 34,
-    borderRadius: "50%",
-    border: "3px solid var(--border)",
-    borderTopColor: "var(--text)",
-    animation: "spin 0.8s linear infinite",
-  },
-  loadingText: {
-    fontSize: 14,
-    color: "var(--text-muted)",
-    margin: 0,
-  },
-  linkBtn: {
-    background: "none",
-    border: "none",
-    fontSize: 13,
-    color: "var(--text-muted)",
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-    textDecoration: "underline",
-    padding: 6,
-  },
-  disclaimer: {
-    textAlign: "center",
-    marginTop: 24,
-  },
-  officialLink: {
-    display: "inline-block",
-    fontSize: 13.5,
-    fontWeight: 600,
-    color: "var(--text-muted)",
-    textDecoration: "none",
-  },
-  disclaimerText: {
-    fontSize: 11.5,
-    color: "var(--text-faint)",
-    lineHeight: 1.45,
-    margin: "8px auto 0",
-    maxWidth: 320,
-  },
-  hint: {
-    textAlign: "center",
-    fontSize: 12.5,
-    color: "var(--text-faint)",
-    marginTop: 32,
-  },
-  dropzoneStack: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-    marginTop: 16,
-  },
-  dropzone: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    width: "100%",
-    padding: "32px 18px",
-    background: "var(--surface)",
-    border: "2px dashed var(--border-strong)",
-    borderRadius: 16,
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-    color: "var(--text)",
-    boxShadow: "var(--card-shadow)",
-    WebkitTapHighlightColor: "transparent",
-  },
-  previewWrap: {
-    display: "flex",
-    flexDirection: "column",
-    marginTop: 16,
-    padding: 12,
-    background: "var(--surface)",
-    border: "1px solid var(--border)",
-    borderRadius: 16,
-    boxShadow: "var(--card-shadow)",
-  },
-  previewImg: {
-    width: "100%",
-    maxHeight: 320,
-    objectFit: "contain",
-    borderRadius: 10,
-    background: "var(--bg)",
-  },
-  progressWrap: {
-    marginTop: 14,
-  },
-  progressBar: {
-    width: "100%",
-    height: 8,
-    background: "var(--border)",
-    borderRadius: 999,
-    overflow: "hidden",
-  },
-  progressFill: {
-    height: "100%",
-    background: "var(--text)",
-    transition: "width 0.2s ease",
-  },
-  progressLabel: {
-    textAlign: "center",
-    fontSize: 12,
-    color: "var(--text-muted)",
-    marginTop: 6,
-  },
-  error: {
-    color: "var(--error-text)",
-    fontSize: 13,
-    textAlign: "center",
-    marginTop: 10,
-    padding: "7px 12px",
-    background: "var(--error-bg)",
-    borderRadius: 10,
-  },
-  textarea: {
-    width: "100%",
-    padding: 14,
-    fontSize: 14,
-    fontFamily: "var(--font)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: 14,
-    background: "var(--input-bg)",
-    color: "var(--text)",
-    boxSizing: "border-box",
-    resize: "vertical",
-    outline: "none",
-    marginTop: 16,
-  },
-  btnRow: {
-    display: "flex",
-    gap: 10,
-    marginTop: 12,
-  },
-  btnPrimary: {
-    flex: 1,
-    padding: "13px 20px",
-    fontSize: 15,
-    fontWeight: 700,
-    background: "var(--primary)",
-    color: "var(--primary-text)",
-    border: "none",
-    borderRadius: 12,
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-  },
-  btnSecondary: {
-    flex: 1,
-    padding: "13px 20px",
-    fontSize: 15,
-    fontWeight: 600,
-    background: "var(--surface)",
-    color: "var(--text)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: 12,
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-  },
   boardHeader: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
-    paddingTop: 4,
+    gap: 8,
+    marginBottom: 10,
+    paddingTop: 2,
   },
-  // Shared by the transient post-swap resume notice and the "Today's puzzle
-  // is ready" banner — one visual language, per the PRD.
+  headerActions: {
+    display: "flex",
+    gap: 6,
+    flexShrink: 0,
+  },
+  // One-line load failure under the header, when a board is still on screen.
   notice: {
     display: "flex",
     alignItems: "center",
@@ -1690,37 +939,44 @@ const styles = {
     fontFamily: "var(--font)",
     lineHeight: 1,
   },
-  boardDateLabel: {
-    fontSize: 12.5,
-    fontWeight: 600,
-    color: "var(--text-muted)",
-    whiteSpace: "nowrap",
-  },
-  backBtn: {
-    background: "none",
-    border: "none",
-    fontSize: 15,
-    color: "var(--text-muted)",
-    cursor: "pointer",
-    padding: "6px 0",
-    fontFamily: "var(--font)",
-    fontWeight: 600,
-  },
-  smallBtn: {
-    padding: "7px 14px",
-    fontSize: 12.5,
-    fontWeight: 600,
-    background: "var(--surface)",
-    color: "var(--text)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: 9,
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-  },
   grid: {
     display: "flex",
     flexDirection: "column",
     gap: 14,
+  },
+  // Stands in for the grid, at roughly its height, so the header and footer
+  // don't jump when the words land.
+  emptyWrap: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    minHeight: "clamp(280px, 52vh, 460px)",
+    textAlign: "center",
+  },
+  emptyText: {
+    fontSize: 14,
+    color: "var(--text-muted)",
+    margin: 0,
+  },
+  spinner: {
+    width: 34,
+    height: 34,
+    borderRadius: "50%",
+    border: "3px solid var(--border)",
+    borderTopColor: "var(--text)",
+    animation: "spin 0.8s linear infinite",
+  },
+  linkBtn: {
+    background: "none",
+    border: "none",
+    fontSize: 13,
+    color: "var(--text-muted)",
+    cursor: "pointer",
+    fontFamily: "var(--font)",
+    textDecoration: "underline",
+    padding: 6,
   },
   rowControl: {
     display: "flex",
@@ -1800,5 +1056,90 @@ const styles = {
     fontSize: 12.5,
     color: "var(--text-faint)",
     marginTop: 16,
+  },
+  footer: {
+    textAlign: "center",
+    fontSize: 12,
+    color: "var(--text-faint)",
+    lineHeight: 1.5,
+    margin: "18px auto 0",
+    maxWidth: 340,
+  },
+  footerLink: {
+    color: "var(--text-muted)",
+    textDecoration: "none",
+    whiteSpace: "nowrap",
+  },
+  howHeading: {
+    fontSize: 17,
+    fontWeight: 800,
+    color: "var(--text)",
+    margin: "0 0 8px",
+    letterSpacing: "-0.3px",
+  },
+  howList: {
+    fontSize: 14,
+    color: "var(--text-soft)",
+    lineHeight: 1.5,
+    margin: 0,
+    paddingLeft: 20,
+  },
+  howNote: {
+    fontSize: 12.5,
+    color: "var(--text-faint)",
+    lineHeight: 1.45,
+    margin: "14px 0 0",
+  },
+  error: {
+    color: "var(--error-text)",
+    fontSize: 13,
+    textAlign: "center",
+    marginTop: 10,
+    padding: "7px 12px",
+    background: "var(--error-bg)",
+    borderRadius: 10,
+  },
+  textarea: {
+    width: "100%",
+    padding: 14,
+    fontSize: 14,
+    fontFamily: "var(--font)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: 14,
+    background: "var(--input-bg)",
+    color: "var(--text)",
+    boxSizing: "border-box",
+    resize: "vertical",
+    outline: "none",
+    marginTop: 16,
+  },
+  btnRow: {
+    display: "flex",
+    gap: 10,
+    marginTop: 12,
+  },
+  btnPrimary: {
+    flex: 1,
+    padding: "13px 20px",
+    fontSize: 15,
+    fontWeight: 700,
+    background: "var(--primary)",
+    color: "var(--primary-text)",
+    border: "none",
+    borderRadius: 12,
+    cursor: "pointer",
+    fontFamily: "var(--font)",
+  },
+  btnSecondary: {
+    flex: 1,
+    padding: "13px 20px",
+    fontSize: 15,
+    fontWeight: 600,
+    background: "var(--surface)",
+    color: "var(--text)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: 12,
+    cursor: "pointer",
+    fontFamily: "var(--font)",
   },
 };

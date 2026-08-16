@@ -1,386 +1,864 @@
 // Unit tests for the saved-puzzle store (src/savedPuzzle.js).
 //
-// This module owns the persisted board schema — the two-slot {current,
-// previous} shape under the "connections-puzzle" localStorage key — and all
-// reasoning about it: legacy migration, malformed-data rejection, metadata
-// stamping, and the board-header date label. The contracts locked down here
-// are load-bearing for the returning-user landing feature (connections-41d):
+// This module owns the persisted board schema — the v2 per-day shape under the
+// "connections-puzzle" localStorage key — and every decision that depends on
+// it. The contracts locked down here are load-bearing for the board-is-the-home
+// -screen redesign (connections-qdx):
 //
-//   1. A legacy {tiles, lockedRows, labels} blob parses as a current board
-//      with source "unknown" — that exact string is how launch recognizes a
-//      pre-metadata save, which it settles by fetching today's words and
-//      comparing (decideLaunch "fetch-compare" → applyLegacyDaily).
-//   2. Malformed data (junk JSON, wrong tile count) parses to "no save",
-//      never a half-valid board.
-//   3. parse(serialize(store)) round-trips losslessly, so persisting and
-//      resuming can never drift apart.
-//   4. dateLabel is pure calendar math on ISO strings (caller supplies
-//      "today" in ET) — DST-safe, no hidden clock reads.
+//   1. Switching days is lossless in both directions: each day keeps its own
+//      locks and labels, and nothing but the player ever overwrites a board.
+//   2. The launch rule is one sentence — same ET day resumes the board the
+//      player was on, a new ET day opens Today — and the ET day boundary
+//      (including across DST) is what flips it, never the UTC one.
+//   3. Migration from either older save shape is lossless: every board that
+//      can be placed keeps its progress, under its date or as Custom.
+//   4. Malformed data degrades per board, never per store: one corrupt entry
+//      can't take the player's other days down with it.
+//   5. parse(serialize(store)) round-trips, so persist and resume can't drift.
+//   6. Adopt-on-match folds a typed board into the day whose words it holds,
+//      so the outage fallback and pre-metadata saves have a way home.
 //
-// Pure module, plain Node — no jsdom, mirroring worker/puzzle.test.js.
+// Pure module, plain Node — no jsdom, mirroring worker/puzzle.test.js. Dates
+// are fixed ISO strings; the only clock reads go through todayET(now).
 
 import { describe, expect, it } from "vitest";
+import { todayET as sharedTodayET } from "../shared/puzzleDates.js";
 import {
-  applyDailySwap,
-  applyLegacyDaily,
-  boardSummary,
-  dateLabel,
+  CUSTOM_KEY,
+  STORE_VERSION,
+  activate,
   decideLaunch,
-  isStaleDaily,
-  makeBoard,
+  emptyStore,
   parseStore,
+  placeFetched,
+  pruneStore,
+  resetActive,
   sameWordSet,
   serializeStore,
-  swapBoards,
+  setCustom,
+  switcherEntries,
   todayET,
-  weekdayLong,
+  updateActive,
 } from "./savedPuzzle.js";
+
+// A Sunday, so the three switcher days span a weekend: Sun 16th, Sat 15th,
+// Fri 14th. TOO_OLD is the first day outside the window.
+const TODAY = "2026-08-16";
+const YESTERDAY = "2026-08-15";
+const DAY_BEFORE = "2026-08-14";
+const TOO_OLD = "2026-08-13";
 
 // 16 distinct words, the way every real save has them: normalized uppercase.
 const TILES = Array.from({ length: 16 }, (_, i) => `WORD${i}`);
+const OTHER_TILES = Array.from({ length: 16 }, (_, i) => `NEW${i}`);
 
-// A pre-metadata save, exactly as the app wrote it before this module existed.
-const legacyBlob = (extra = {}) =>
-  JSON.stringify({
-    tiles: TILES,
-    lockedRows: [true, false, false, false],
-    labels: ["fruit", "", "", ""],
-    ...extra,
+const NO_LOCKS = [false, false, false, false];
+const NO_LABELS = ["", "", "", ""];
+
+const board = (over = {}) => ({
+  tiles: TILES,
+  lockedRows: NO_LOCKS,
+  labels: NO_LABELS,
+  source: "daily",
+  ...over,
+});
+
+// A board with progress on it — the thing every losslessness test is about.
+const played = (over = {}) =>
+  board({ lockedRows: [true, false, true, false], labels: ["fish", "", "birds", ""], ...over });
+
+const daily = (date, over = {}) => board({ source: "daily", date, ...over });
+const custom = (date = TODAY, over = {}) => board({ source: "manual", date, ...over });
+
+const storeOf = (boards, active = null, activeDate = null) => ({
+  version: STORE_VERSION,
+  boards,
+  active,
+  activeDate,
+});
+
+// Freeze a store (and its boards) so any accidental mutation throws in ESM's
+// strict mode instead of silently corrupting the caller's state.
+function deepFreeze(store) {
+  Object.values(store.boards).forEach((b) => {
+    Object.values(b).forEach((v) => Array.isArray(v) && Object.freeze(v));
+    Object.freeze(b);
+  });
+  Object.freeze(store.boards);
+  return Object.freeze(store);
+}
+
+// ---- shape ---------------------------------------------------------------
+
+describe("emptyStore", () => {
+  it("is a versioned store with nothing in it and nothing on screen", () => {
+    expect(emptyStore()).toEqual({ version: 2, boards: {}, active: null, activeDate: null });
+    expect(STORE_VERSION).toBe(2);
+    expect(CUSTOM_KEY).toBe("custom");
   });
 
-describe("parseStore — legacy migration", () => {
-  it("parses a legacy flat blob as a current board with unknown provenance", () => {
-    const store = parseStore(legacyBlob());
-    expect(store).toEqual({
-      current: {
+  it("hands out a fresh object each time — no shared mutable singleton", () => {
+    expect(emptyStore()).not.toBe(emptyStore());
+  });
+});
+
+// ---- parseStore: the current shape ---------------------------------------
+
+describe("parseStore — v2 shape", () => {
+  const full = storeOf(
+    {
+      [TODAY]: daily(TODAY),
+      [YESTERDAY]: played({ date: YESTERDAY }),
+      [CUSTOM_KEY]: custom(DAY_BEFORE, { labels: ["mine", "", "", ""] }),
+    },
+    YESTERDAY,
+    TODAY,
+  );
+
+  it("round-trips a full store — three boards, progress, and what's on screen", () => {
+    expect(parseStore(serializeStore(full), TODAY)).toEqual(full);
+  });
+
+  it("drops one corrupt board without taking the rest of the store down", () => {
+    // Contract #4: a player with a week of boards must not lose Today because
+    // some other day's entry got mangled.
+    const raw = JSON.stringify(
+      storeOf(
+        {
+          [TODAY]: daily(TODAY),
+          [YESTERDAY]: { tiles: ["JUST", "FOUR", "WORDS", "HERE"] },
+          [CUSTOM_KEY]: custom(),
+        },
+        TODAY,
+        TODAY,
+      ),
+    );
+    const store = parseStore(raw, TODAY);
+    expect(Object.keys(store.boards).sort()).toEqual([TODAY, CUSTOM_KEY].sort());
+    expect(store.active).toBe(TODAY);
+  });
+
+  it("drops boards filed under a key that is neither a date nor 'custom'", () => {
+    const raw = JSON.stringify(
+      storeOf({ [TODAY]: daily(TODAY), yesterday: daily(YESTERDAY), "": daily(TODAY) }, TODAY, TODAY),
+    );
+    expect(Object.keys(parseStore(raw, TODAY).boards)).toEqual([TODAY]);
+  });
+
+  it("takes a daily board's date from its key, so the two can never drift", () => {
+    const raw = JSON.stringify(storeOf({ [YESTERDAY]: daily("1999-01-01") }, YESTERDAY, TODAY));
+    expect(parseStore(raw, TODAY).boards[YESTERDAY].date).toBe(YESTERDAY);
+  });
+
+  it("drops a custom board with no usable date — it could never age out", () => {
+    // The custom board isn't tied to a puzzle date, so the date it was typed
+    // on is the only thing that expires it. Without one it would sit in the
+    // switcher forever; every writer stamps it, so this is corruption.
+    const noDate = custom();
+    delete noDate.date;
+    expect(parseStore(JSON.stringify(storeOf({ [CUSTOM_KEY]: noDate })), TODAY)).toEqual(
+      emptyStore(),
+    );
+    const badDate = custom("last Tuesday");
+    expect(parseStore(JSON.stringify(storeOf({ [CUSTOM_KEY]: badDate })), TODAY)).toEqual(
+      emptyStore(),
+    );
+  });
+
+  it("defaults corrupt locks/labels and an unrecognized source instead of dropping the board", () => {
+    // Tiles are the save; locks, labels, and provenance are recoverable.
+    const raw = JSON.stringify(
+      storeOf({ [TODAY]: daily(TODAY, { lockedRows: [true], labels: "x", source: "telepathy" }) }),
+    );
+    expect(parseStore(raw, TODAY).boards[TODAY]).toEqual({
+      tiles: TILES,
+      lockedRows: NO_LOCKS,
+      labels: NO_LABELS,
+      source: "unknown",
+      date: TODAY,
+    });
+  });
+
+  it("keeps active only when its board survived, and activeDate only when ISO", () => {
+    const dangling = JSON.stringify(storeOf({ [TODAY]: daily(TODAY) }, YESTERDAY, TODAY));
+    expect(parseStore(dangling, TODAY)).toEqual(storeOf({ [TODAY]: daily(TODAY) }));
+
+    const badStamp = JSON.stringify(storeOf({ [TODAY]: daily(TODAY) }, TODAY, "yesterday-ish"));
+    expect(parseStore(badStamp, TODAY).activeDate).toBe(null);
+  });
+
+  it("prunes on the way in — a save left for a week can't resurrect old boards", () => {
+    const stale = JSON.stringify(
+      storeOf({ [TODAY]: daily(TODAY), [TOO_OLD]: daily(TOO_OLD) }, TOO_OLD, TOO_OLD),
+    );
+    const store = parseStore(stale, TODAY);
+    expect(Object.keys(store.boards)).toEqual([TODAY]);
+    expect(store.active).toBe(null);
+    expect(decideLaunch(store, TODAY)).toBe("fetch-today");
+  });
+});
+
+describe("parseStore — nothing usable is no save", () => {
+  it("rejects missing, junk, and non-object payloads", () => {
+    expect(parseStore(null, TODAY)).toBe(null);
+    expect(parseStore("", TODAY)).toBe(null);
+    expect(parseStore("{not json", TODAY)).toBe(null);
+    expect(parseStore("42", TODAY)).toBe(null);
+    expect(parseStore('"tiles"', TODAY)).toBe(null);
+    expect(parseStore("null", TODAY)).toBe(null);
+    expect(parseStore("[]", TODAY)).toBe(null);
+  });
+
+  it("reads a well-formed save with no surviving boards as a valid empty store, not a bad one", () => {
+    // The app persists an empty store whenever nothing is on screen (a launch
+    // fetch that failed), and a week-old save prunes down to nothing. Neither
+    // is corruption: returning null here would make the app stash them as
+    // "unreadable" and warn on every reload.
+    expect(parseStore(JSON.stringify(emptyStore()), TODAY)).toEqual(emptyStore());
+    expect(parseStore(JSON.stringify(storeOf({ [TOO_OLD]: daily(TOO_OLD) })), TODAY)).toEqual(
+      emptyStore(),
+    );
+    expect(parseStore(JSON.stringify({ version: 2, boards: "nope" }), TODAY)).toEqual(emptyStore());
+  });
+
+  it("drops boards with the wrong tile count or non-string tiles, leaving an empty store", () => {
+    const bad = (tiles) => JSON.stringify(storeOf({ [TODAY]: daily(TODAY, { tiles }) }));
+    expect(parseStore(bad(TILES.slice(0, 15)), TODAY)).toEqual(emptyStore());
+    expect(parseStore(bad("sixteen words"), TODAY)).toEqual(emptyStore());
+    expect(parseStore(bad([...TILES.slice(0, 15), 16]), TODAY)).toEqual(emptyStore());
+  });
+});
+
+// ---- parseStore: migration -----------------------------------------------
+
+// The two-slot shape this replaced: { current, previous }, provenance carried
+// on the board rather than in a key.
+const twoSlot = (current, previous) =>
+  JSON.stringify(previous === undefined ? { current } : { current, previous });
+
+const oldBoard = (over = {}) => ({
+  tiles: TILES,
+  lockedRows: [true, false, false, false],
+  labels: ["fruit", "", "", ""],
+  source: "daily",
+  chosenExplicitly: false,
+  ...over,
+});
+
+describe("parseStore — two-slot migration", () => {
+  it("files both dated daily boards under their dates, progress intact", () => {
+    const store = parseStore(
+      twoSlot(oldBoard({ date: TODAY }), oldBoard({ date: YESTERDAY, tiles: OTHER_TILES })),
+      TODAY,
+    );
+    expect(store.boards[TODAY]).toEqual({
+      tiles: TILES,
+      lockedRows: [true, false, false, false],
+      labels: ["fruit", "", "", ""],
+      source: "daily",
+      date: TODAY,
+    });
+    expect(store.boards[YESTERDAY].tiles).toEqual(OTHER_TILES);
+    // chosenExplicitly is gone from the schema — the new launch rule has no
+    // exemptions to encode.
+    expect("chosenExplicitly" in store.boards[TODAY]).toBe(false);
+  });
+
+  it("resumes only when the current board was provably today's", () => {
+    const store = parseStore(twoSlot(oldBoard({ date: TODAY })), TODAY);
+    expect(store.active).toBe(TODAY);
+    expect(store.activeDate).toBe(TODAY);
+    expect(decideLaunch(store, TODAY)).toBe("resume");
+  });
+
+  it("opens Today when the current board was yesterday's — but keeps that board", () => {
+    // The returning-user case the redesign is built around: no auto-swap, no
+    // notice, the old board just sits under Yesterday one tap away.
+    const store = parseStore(twoSlot(oldBoard({ date: YESTERDAY })), TODAY);
+    expect(store.active).toBe(YESTERDAY);
+    expect(store.activeDate).toBe(null);
+    expect(decideLaunch(store, TODAY)).toBe("fetch-today");
+    expect(store.boards[YESTERDAY].lockedRows).toEqual([true, false, false, false]);
+  });
+
+  it("files ocr/manual/demo boards as Custom, dated today so they age out", () => {
+    for (const source of ["ocr", "manual", "demo"]) {
+      const store = parseStore(twoSlot(oldBoard({ source })), TODAY);
+      expect(store.boards[CUSTOM_KEY]).toEqual({
         tiles: TILES,
         lockedRows: [true, false, false, false],
         labels: ["fruit", "", "", ""],
-        source: "unknown",
-        chosenExplicitly: false,
-      },
-      previous: null,
+        source: "manual",
+        date: TODAY,
+      });
+      expect(store.active).toBe(CUSTOM_KEY);
+      expect(decideLaunch(store, TODAY)).toBe("fetch-today");
+    }
+  });
+
+  it("keeps an unprovable board 'unknown' so adopt-on-match can still claim it", () => {
+    const store = parseStore(twoSlot(oldBoard({ source: "unknown" })), TODAY);
+    expect(store.boards[CUSTOM_KEY].source).toBe("unknown");
+  });
+
+  it("files a daily board that never recorded a date as Custom", () => {
+    const dateless = oldBoard();
+    delete dateless.date;
+    const store = parseStore(twoSlot(dateless), TODAY);
+    expect(Object.keys(store.boards)).toEqual([CUSTOM_KEY]);
+    expect(store.boards[CUSTOM_KEY].source).toBe("manual");
+  });
+
+  it("lets current win a key collision with previous", () => {
+    const store = parseStore(
+      twoSlot(oldBoard({ date: TODAY }), oldBoard({ date: TODAY, tiles: OTHER_TILES })),
+      TODAY,
+    );
+    expect(store.boards[TODAY].tiles).toEqual(TILES);
+    expect(Object.keys(store.boards)).toEqual([TODAY]);
+  });
+
+  it("gives the one custom slot to current, not previous", () => {
+    const store = parseStore(
+      twoSlot(oldBoard({ source: "manual" }), oldBoard({ source: "ocr", tiles: OTHER_TILES })),
+      TODAY,
+    );
+    expect(store.boards[CUSTOM_KEY].tiles).toEqual(TILES);
+  });
+
+  it("keeps a valid previous board when current is corrupt, with nothing on screen", () => {
+    const store = parseStore(twoSlot({ tiles: [] }, oldBoard({ date: YESTERDAY })), TODAY);
+    expect(Object.keys(store.boards)).toEqual([YESTERDAY]);
+    expect(store.active).toBe(null);
+    expect(decideLaunch(store, TODAY)).toBe("fetch-today");
+  });
+
+  it("prunes a migrated board that is already outside the window", () => {
+    const store = parseStore(
+      twoSlot(oldBoard({ date: TODAY }), oldBoard({ date: TOO_OLD })),
+      TODAY,
+    );
+    expect(Object.keys(store.boards)).toEqual([TODAY]);
+  });
+
+  it("round-trips after migration — the new shape is what gets written back", () => {
+    const migrated = parseStore(twoSlot(oldBoard({ date: TODAY })), TODAY);
+    expect(parseStore(serializeStore(migrated), TODAY)).toEqual(migrated);
+  });
+});
+
+describe("parseStore — flat legacy blob", () => {
+  const legacyBlob = (extra = {}) =>
+    JSON.stringify({
+      tiles: TILES,
+      lockedRows: [true, false, false, false],
+      labels: ["fruit", "", "", ""],
+      ...extra,
     });
-    // No date key at all — downstream slices treat "no trusted date" as exempt.
-    expect("date" in store.current).toBe(false);
+
+  it("lands as Custom with unknown provenance and opens Today", () => {
+    const store = parseStore(legacyBlob(), TODAY);
+    expect(store.boards[CUSTOM_KEY]).toEqual({
+      tiles: TILES,
+      lockedRows: [true, false, false, false],
+      labels: ["fruit", "", "", ""],
+      source: "unknown",
+      date: TODAY,
+    });
+    expect(store.active).toBe(null);
+    expect(decideLaunch(store, TODAY)).toBe("fetch-today");
   });
 
-  it("defaults missing or corrupt lockedRows/labels instead of dropping the save", () => {
-    // The old loadSaved was lenient here (`data.lockedRows || defaults`);
-    // tiles are the save, locks/labels are recoverable decoration.
-    const bare = parseStore(JSON.stringify({ tiles: TILES }));
-    expect(bare.current.lockedRows).toEqual([false, false, false, false]);
-    expect(bare.current.labels).toEqual(["", "", "", ""]);
-
-    const corrupt = parseStore(legacyBlob({ lockedRows: [true], labels: "x" }));
-    expect(corrupt.current.tiles).toEqual(TILES);
-    expect(corrupt.current.lockedRows).toEqual([false, false, false, false]);
-    expect(corrupt.current.labels).toEqual(["", "", "", ""]);
-  });
-});
-
-// A fully-stamped daily board in the new shape.
-const dailyBoard = (overrides = {}) => ({
-  tiles: TILES,
-  lockedRows: [false, true, false, false],
-  labels: ["", "trees", "", ""],
-  date: "2026-06-09",
-  source: "daily",
-  chosenExplicitly: false,
-  ...overrides,
-});
-
-describe("parseStore — two-slot shape", () => {
-  it("parses a current daily board with its metadata intact", () => {
-    const store = parseStore(JSON.stringify({ current: dailyBoard() }));
-    expect(store).toEqual({ current: dailyBoard(), previous: null });
+  it("defaults missing locks/labels rather than dropping the save", () => {
+    const store = parseStore(JSON.stringify({ tiles: TILES }), TODAY);
+    expect(store.boards[CUSTOM_KEY].lockedRows).toEqual(NO_LOCKS);
+    expect(store.boards[CUSTOM_KEY].labels).toEqual(NO_LABELS);
   });
 
-  it("parses both slots when a previous board exists", () => {
-    const prev = dailyBoard({ date: "2026-06-08", chosenExplicitly: true });
-    const store = parseStore(JSON.stringify({ current: dailyBoard(), previous: prev }));
-    expect(store.previous).toEqual(prev);
-  });
-
-  it("keeps the current board when only the previous slot is corrupt", () => {
-    const store = parseStore(
-      JSON.stringify({ current: dailyBoard(), previous: { tiles: ["JUST", "FOUR"] } }),
-    );
-    expect(store.current).toEqual(dailyBoard());
-    expect(store.previous).toBe(null);
-  });
-
-  it("treats a corrupt current board as no save even if previous is fine", () => {
-    expect(
-      parseStore(JSON.stringify({ current: { tiles: [] }, previous: dailyBoard() })),
-    ).toBe(null);
-  });
-
-  it("degrades unrecognized metadata softly instead of dropping the board", () => {
-    const store = parseStore(
-      JSON.stringify({
-        current: dailyBoard({ source: "telepathy", chosenExplicitly: "yes", date: "June 9" }),
-      }),
-    );
-    expect(store.current.source).toBe("unknown");
-    expect(store.current.chosenExplicitly).toBe(false);
-    expect("date" in store.current).toBe(false);
+  it("is reclaimed by adopt-on-match when it holds today's words", () => {
+    // The whole point of routing it to Custom: the first fetch settles what it
+    // actually was, and the player's progress comes with it.
+    const store = parseStore(legacyBlob(), TODAY);
+    const placed = placeFetched(store, { date: TODAY, words: [...TILES].reverse() }, TODAY);
+    expect(placed.boards[TODAY].lockedRows).toEqual([true, false, false, false]);
+    expect(placed.boards[CUSTOM_KEY]).toBeUndefined();
+    expect(decideLaunch(placed, TODAY)).toBe("resume");
   });
 });
 
-describe("parseStore — malformed data is no save", () => {
-  it("rejects missing, junk, and non-object payloads", () => {
-    expect(parseStore(null)).toBe(null);
-    expect(parseStore("")).toBe(null);
-    expect(parseStore("{not json")).toBe(null);
-    expect(parseStore("42")).toBe(null);
-    expect(parseStore('"tiles"')).toBe(null);
-    expect(parseStore("null")).toBe(null);
-  });
-
-  it("rejects a board with the wrong tile count or non-string tiles", () => {
-    expect(parseStore(JSON.stringify({ tiles: TILES.slice(0, 15) }))).toBe(null);
-    expect(parseStore(JSON.stringify({ tiles: "sixteen words" }))).toBe(null);
-    expect(parseStore(legacyBlob({ tiles: [...TILES.slice(0, 15), 16] }))).toBe(null);
-  });
-});
+// ---- serializeStore ------------------------------------------------------
 
 describe("serializeStore", () => {
-  it("round-trips a two-slot store through parse losslessly", () => {
-    const store = {
-      current: dailyBoard(),
-      previous: dailyBoard({ date: "2026-06-08", chosenExplicitly: true }),
-    };
-    expect(parseStore(serializeStore(store))).toEqual(store);
+  it("normalizes on the way out — invalid boards and dangling active are dropped", () => {
+    const messy = storeOf(
+      { [TODAY]: daily(TODAY), [YESTERDAY]: { tiles: 3 }, nonsense: daily(TODAY) },
+      YESTERDAY,
+      TODAY,
+    );
+    expect(JSON.parse(serializeStore(messy))).toEqual(storeOf({ [TODAY]: daily(TODAY) }));
   });
 
-  it("round-trips a migrated legacy save into the two-slot shape", () => {
-    // The exact path an existing user's save takes on first launch after this
-    // ships: legacy blob → parse → persist effect serializes → next launch
-    // parses the new shape. Provenance must survive as "unknown".
-    const migrated = parseStore(legacyBlob());
-    const reloaded = parseStore(serializeStore(migrated));
-    expect(reloaded).toEqual(migrated);
-    expect(JSON.parse(serializeStore(migrated)).current.source).toBe("unknown");
+  it("never throws on a missing or malformed store", () => {
+    // It runs inside a persist effect; a crash here would take the app down
+    // mid-play. An empty store is written instead.
+    expect(JSON.parse(serializeStore(null))).toEqual(emptyStore());
+    expect(JSON.parse(serializeStore({}))).toEqual(emptyStore());
   });
 
-  it("serializes a store with no previous board", () => {
-    const store = parseStore(serializeStore({ current: dailyBoard(), previous: null }));
-    expect(store.previous).toBe(null);
-  });
-
-  it("refuses to serialize an invalid current board", () => {
-    expect(() => serializeStore({ current: { tiles: ["nope"] }, previous: null })).toThrow();
+  it("writes the version stamp so the next parse knows the shape", () => {
+    expect(JSON.parse(serializeStore(storeOf({ [TODAY]: daily(TODAY) }))).version).toBe(2);
   });
 });
 
-describe("makeBoard", () => {
-  it("builds a fresh daily board stamped with the server date", () => {
-    // The auto-load / "Today's Puzzle" card path: server-resolved date,
-    // not chosen explicitly.
-    expect(makeBoard(TILES, { date: "2026-06-09", source: "daily" })).toEqual({
-      tiles: TILES,
-      lockedRows: [false, false, false, false],
-      labels: ["", "", "", ""],
-      date: "2026-06-09",
-      source: "daily",
-      chosenExplicitly: false,
-    });
+// ---- pruneStore ----------------------------------------------------------
+
+describe("pruneStore", () => {
+  it("keeps the window edge and drops the day past it", () => {
+    const store = pruneStore(
+      storeOf({
+        [TODAY]: daily(TODAY),
+        [YESTERDAY]: daily(YESTERDAY),
+        [DAY_BEFORE]: daily(DAY_BEFORE),
+        [TOO_OLD]: daily(TOO_OLD),
+      }),
+      TODAY,
+    );
+    expect(Object.keys(store.boards).sort()).toEqual([DAY_BEFORE, YESTERDAY, TODAY]);
   });
 
-  it("marks a past-date chip load as chosen explicitly", () => {
-    const board = makeBoard(TILES, {
-      date: "2026-06-05",
-      source: "daily",
-      chosenExplicitly: true,
-    });
-    expect(board.chosenExplicitly).toBe(true);
+  it("drops a daily board dated after today (client clock skew)", () => {
+    const tomorrow = "2026-08-17";
+    const store = pruneStore(storeOf({ [tomorrow]: daily(tomorrow) }, tomorrow, TODAY), TODAY);
+    expect(store.boards).toEqual({});
   });
 
-  it("builds dateless boards for ocr/manual/demo sources", () => {
-    for (const source of ["ocr", "manual", "demo"]) {
-      const board = makeBoard(TILES, { source });
-      expect(board.source).toBe(source);
-      expect("date" in board).toBe(false);
-      expect(board.chosenExplicitly).toBe(false);
-    }
+  it("ages the custom board out by the date it was typed", () => {
+    expect(pruneStore(storeOf({ [CUSTOM_KEY]: custom(DAY_BEFORE) }), TODAY).boards).toHaveProperty(
+      CUSTOM_KEY,
+    );
+    expect(pruneStore(storeOf({ [CUSTOM_KEY]: custom(TOO_OLD) }), TODAY).boards).toEqual({});
+  });
+
+  it("clears active and its stamp when the active board is pruned away", () => {
+    const store = pruneStore(
+      storeOf({ [TODAY]: daily(TODAY), [TOO_OLD]: daily(TOO_OLD) }, TOO_OLD, TODAY),
+      TODAY,
+    );
+    expect(store.active).toBe(null);
+    expect(store.activeDate).toBe(null);
+    expect(decideLaunch(store, TODAY)).toBe("fetch-today");
+  });
+
+  it("leaves the input store untouched", () => {
+    const before = deepFreeze(storeOf({ [TODAY]: daily(TODAY), [TOO_OLD]: daily(TOO_OLD) }, TODAY, TODAY));
+    pruneStore(before, TODAY);
+    expect(Object.keys(before.boards).sort()).toEqual([TOO_OLD, TODAY].sort());
   });
 });
+
+// ---- decideLaunch --------------------------------------------------------
 
 describe("decideLaunch", () => {
-  const TODAY = "2026-06-09";
-
-  it("fetches today when there is no save", () => {
+  it("opens Today when there is no save", () => {
     expect(decideLaunch(null, TODAY)).toBe("fetch-today");
+    expect(decideLaunch(emptyStore(), TODAY)).toBe("fetch-today");
   });
 
-  it("swaps a stale auto-loaded daily board for today's puzzle", () => {
-    const saved = { current: dailyBoard({ date: "2026-06-08" }), previous: null };
-    expect(decideLaunch(saved, TODAY)).toBe("fetch-swap");
+  it("resumes the board the player was on earlier the same ET day", () => {
+    expect(decideLaunch(storeOf({ [TODAY]: daily(TODAY) }, TODAY, TODAY), TODAY)).toBe("resume");
+    // Including a past day's board — if they switched to it today, that's
+    // where they were, and reopening it is not a stale landing.
+    expect(decideLaunch(storeOf({ [YESTERDAY]: daily(YESTERDAY) }, YESTERDAY, TODAY), TODAY)).toBe(
+      "resume",
+    );
+    expect(decideLaunch(storeOf({ [CUSTOM_KEY]: custom() }, CUSTOM_KEY, TODAY), TODAY)).toBe(
+      "resume",
+    );
   });
 
-  it("resumes silently when the daily board is already today's", () => {
-    const saved = { current: dailyBoard({ date: TODAY }), previous: null };
-    expect(decideLaunch(saved, TODAY)).toBe("resume");
+  it("opens Today on a new ET day, whatever the board was", () => {
+    expect(decideLaunch(storeOf({ [YESTERDAY]: daily(YESTERDAY) }, YESTERDAY, YESTERDAY), TODAY)).toBe(
+      "fetch-today",
+    );
+    // Yesterday's session ended on yesterday's *today* board — still a new day.
+    expect(decideLaunch(storeOf({ [YESTERDAY]: daily(YESTERDAY) }, YESTERDAY, YESTERDAY), TODAY)).toBe(
+      "fetch-today",
+    );
   });
 
-  it("never swaps out a stale board the player chose explicitly", () => {
-    const saved = {
-      current: dailyBoard({ date: "2026-06-05", chosenExplicitly: true }),
-      previous: null,
-    };
-    expect(decideLaunch(saved, TODAY)).toBe("resume");
+  it("opens Today when the stamp is missing or the active board isn't there", () => {
+    expect(decideLaunch(storeOf({ [TODAY]: daily(TODAY) }, TODAY, null), TODAY)).toBe("fetch-today");
+    expect(decideLaunch(storeOf({ [TODAY]: daily(TODAY) }, YESTERDAY, TODAY), TODAY)).toBe(
+      "fetch-today",
+    );
+    // A hand-edited save can point `active` at anything; an inherited property
+    // name must not read as a board.
+    expect(decideLaunch(storeOf({ [TODAY]: daily(TODAY) }, "constructor", TODAY), TODAY)).toBe(
+      "fetch-today",
+    );
   });
 
-  it("resumes ocr/manual/demo boards silently — no trusted date, no nagging", () => {
-    for (const source of ["ocr", "manual", "demo"]) {
-      const saved = { current: makeBoard(TILES, { source }), previous: null };
-      expect(decideLaunch(saved, TODAY)).toBe("resume");
+  it("flips at midnight Eastern, not midnight UTC", () => {
+    // Stamped at 20:00 ET on Jan 14 (01:00 UTC Jan 15). The UTC day has
+    // already turned over; the ET one hasn't, so the board still resumes.
+    const stamped = todayET(new Date("2026-01-15T01:00:00Z"));
+    const store = storeOf({ [stamped]: daily(stamped) }, stamped, stamped);
+    expect(stamped).toBe("2026-01-14");
+    expect(decideLaunch(store, todayET(new Date("2026-01-15T04:59:00Z")))).toBe("resume");
+    expect(decideLaunch(store, todayET(new Date("2026-01-15T05:00:00Z")))).toBe("fetch-today");
+  });
+
+  it("follows the ET boundary as it shifts across spring-forward", () => {
+    // Stamped mid-morning on 2026-03-08, the day US DST begins. That night's
+    // ET midnight is 04:00 UTC (EDT), an hour earlier in UTC than the
+    // previous one — the decision must track the zone, not a fixed offset.
+    const stamped = todayET(new Date("2026-03-08T14:00:00Z"));
+    const store = storeOf({ [stamped]: daily(stamped) }, stamped, stamped);
+    expect(stamped).toBe("2026-03-08");
+    expect(decideLaunch(store, todayET(new Date("2026-03-09T03:59:00Z")))).toBe("resume");
+    expect(decideLaunch(store, todayET(new Date("2026-03-09T04:00:00Z")))).toBe("fetch-today");
+  });
+});
+
+// ---- activate ------------------------------------------------------------
+
+describe("activate", () => {
+  const twoDays = () =>
+    storeOf(
+      { [TODAY]: played({ date: TODAY }), [YESTERDAY]: daily(YESTERDAY, { labels: ["a", "b", "c", "d"] }) },
+      TODAY,
+      TODAY,
+    );
+
+  it("switches boards and stamps the day the switch happened", () => {
+    const next = activate(twoDays(), YESTERDAY, TODAY);
+    expect(next.active).toBe(YESTERDAY);
+    expect(next.activeDate).toBe(TODAY);
+  });
+
+  it("is lossless in both directions — each day keeps its own progress", () => {
+    // Contract #1: exploring another day never costs the player anything.
+    const start = deepFreeze(twoDays());
+    const there = activate(start, YESTERDAY, TODAY);
+    const back = activate(there, TODAY, TODAY);
+    expect(back.boards[TODAY]).toEqual(start.boards[TODAY]);
+    expect(back.boards[YESTERDAY]).toEqual(start.boards[YESTERDAY]);
+    expect(back.active).toBe(TODAY);
+  });
+
+  it("throws for a board that isn't there", () => {
+    expect(() => activate(twoDays(), DAY_BEFORE, TODAY)).toThrow(TypeError);
+    expect(() => activate(twoDays(), CUSTOM_KEY, TODAY)).toThrow(TypeError);
+    expect(() => activate(twoDays(), "constructor", TODAY)).toThrow(TypeError);
+  });
+
+  it("leaves the input store untouched", () => {
+    const before = deepFreeze(twoDays());
+    const next = activate(before, YESTERDAY, TODAY);
+    expect(before.active).toBe(TODAY);
+    expect(next).not.toBe(before);
+  });
+});
+
+// ---- placeFetched --------------------------------------------------------
+
+describe("placeFetched", () => {
+  it("creates a fresh board in the fetched order and switches to it", () => {
+    const next = placeFetched(emptyStore(), { date: TODAY, words: TILES }, TODAY);
+    expect(next.boards[TODAY]).toEqual({
+      tiles: TILES,
+      lockedRows: NO_LOCKS,
+      labels: NO_LABELS,
+      source: "daily",
+      date: TODAY,
+    });
+    expect(next.active).toBe(TODAY);
+    expect(next.activeDate).toBe(TODAY);
+  });
+
+  it("never overwrites a board that already exists — it just switches to it", () => {
+    // Tapping a day the player has already played must not re-deal it, even
+    // if a fetch happened to be in flight.
+    const store = deepFreeze(storeOf({ [YESTERDAY]: played({ date: YESTERDAY }) }, null, null));
+    const next = placeFetched(store, { date: YESTERDAY, words: OTHER_TILES }, TODAY);
+    expect(next.boards[YESTERDAY]).toEqual(store.boards[YESTERDAY]);
+    expect(next.active).toBe(YESTERDAY);
+    expect(next.activeDate).toBe(TODAY);
+  });
+
+  it("adopts a matching custom board — progress moves to the day, Custom clears", () => {
+    // Contract #6: words typed during an outage turn out to be that day's
+    // puzzle. Order, case, spacing, and Unicode composition are all
+    // irrelevant; the player's locks and labels are not.
+    const typed = [" el  niño ", "café", ...TILES.slice(2)];
+    const fetched = ["CAFÉ", "EL NIÑO", ...[...TILES.slice(2)].reverse()];
+    const store = deepFreeze(
+      storeOf({ [CUSTOM_KEY]: custom(TODAY, { tiles: typed, lockedRows: [true, true, false, false], labels: ["x", "y", "", ""] }) }, CUSTOM_KEY, TODAY),
+    );
+    const next = placeFetched(store, { date: TODAY, words: fetched }, TODAY);
+    expect(next.boards[TODAY]).toEqual({
+      tiles: typed, // the player's own arrangement survives, not the fetch order
+      lockedRows: [true, true, false, false],
+      labels: ["x", "y", "", ""],
+      source: "daily",
+      date: TODAY,
+    });
+    expect(CUSTOM_KEY in next.boards).toBe(false);
+    expect(next.active).toBe(TODAY);
+  });
+
+  it("leaves a non-matching custom board alone — two boards, two segments", () => {
+    const store = storeOf({ [CUSTOM_KEY]: played({ source: "manual", date: TODAY }) }, CUSTOM_KEY, TODAY);
+    const next = placeFetched(store, { date: TODAY, words: OTHER_TILES }, TODAY);
+    expect(next.boards[CUSTOM_KEY]).toEqual(store.boards[CUSTOM_KEY]);
+    expect(next.boards[TODAY].tiles).toEqual(OTHER_TILES);
+    expect(next.active).toBe(TODAY);
+  });
+
+  it("does not adopt into a day that already has a board", () => {
+    const store = storeOf(
+      { [TODAY]: played({ date: TODAY }), [CUSTOM_KEY]: custom(TODAY) },
+      TODAY,
+      TODAY,
+    );
+    const next = placeFetched(store, { date: TODAY, words: TILES }, TODAY);
+    expect(next.boards[CUSTOM_KEY]).toBeDefined();
+    expect(next.boards[TODAY]).toEqual(store.boards[TODAY]);
+  });
+
+  it("adopts across days too — yesterday's words typed during yesterday's outage", () => {
+    const store = storeOf({ [CUSTOM_KEY]: played({ source: "manual", date: YESTERDAY }) }, CUSTOM_KEY, YESTERDAY);
+    const next = placeFetched(store, { date: YESTERDAY, words: TILES }, TODAY);
+    expect(next.boards[YESTERDAY].date).toBe(YESTERDAY);
+    expect(next.boards[YESTERDAY].source).toBe("daily");
+    expect(next.activeDate).toBe(TODAY);
+  });
+
+  it("rejects a malformed date or word list — the caller validates the response", () => {
+    const store = emptyStore();
+    expect(() => placeFetched(store, { date: "today", words: TILES }, TODAY)).toThrow(TypeError);
+    expect(() => placeFetched(store, { date: TODAY, words: TILES.slice(0, 15) }, TODAY)).toThrow(
+      TypeError,
+    );
+    expect(() => placeFetched(store, { date: TODAY, words: null }, TODAY)).toThrow(TypeError);
+  });
+
+  it("leaves the input store untouched", () => {
+    const before = deepFreeze(storeOf({ [CUSTOM_KEY]: custom() }, CUSTOM_KEY, TODAY));
+    placeFetched(before, { date: TODAY, words: TILES }, TODAY);
+    expect(Object.keys(before.boards)).toEqual([CUSTOM_KEY]);
+  });
+});
+
+// ---- setCustom -----------------------------------------------------------
+
+describe("setCustom", () => {
+  it("creates the custom board from typed words and switches to it", () => {
+    const next = setCustom(emptyStore(), TILES, TODAY);
+    expect(next.boards[CUSTOM_KEY]).toEqual({
+      tiles: TILES,
+      lockedRows: NO_LOCKS,
+      labels: NO_LABELS,
+      source: "manual",
+      date: TODAY,
+    });
+    expect(next.active).toBe(CUSTOM_KEY);
+    expect(next.activeDate).toBe(TODAY);
+    expect(decideLaunch(next, TODAY)).toBe("resume");
+  });
+
+  it("replaces an existing custom board rather than accumulating them", () => {
+    const first = setCustom(emptyStore(), TILES, YESTERDAY);
+    const second = setCustom(first, OTHER_TILES, TODAY);
+    expect(second.boards[CUSTOM_KEY].tiles).toEqual(OTHER_TILES);
+    expect(second.boards[CUSTOM_KEY].date).toBe(TODAY);
+    expect(Object.keys(second.boards)).toEqual([CUSTOM_KEY]);
+  });
+
+  it("leaves the daily boards alone", () => {
+    const store = deepFreeze(storeOf({ [TODAY]: played({ date: TODAY }) }, TODAY, TODAY));
+    const next = setCustom(store, OTHER_TILES, TODAY);
+    expect(next.boards[TODAY]).toEqual(store.boards[TODAY]);
+    expect(store.boards[CUSTOM_KEY]).toBeUndefined();
+  });
+
+  it("rejects a bad word list or a bad today", () => {
+    // The date is what ages the board out; without a real one the board would
+    // be dropped on the next parse, silently losing the words just typed.
+    expect(() => setCustom(emptyStore(), TILES.slice(0, 15), TODAY)).toThrow(TypeError);
+    expect(() => setCustom(emptyStore(), TILES, "today")).toThrow(TypeError);
+  });
+
+  it("survives a persist round-trip", () => {
+    const next = setCustom(emptyStore(), TILES, TODAY);
+    expect(parseStore(serializeStore(next), TODAY)).toEqual(next);
+  });
+});
+
+// ---- updateActive / resetActive ------------------------------------------
+
+describe("updateActive", () => {
+  const start = () => storeOf({ [TODAY]: daily(TODAY), [YESTERDAY]: daily(YESTERDAY) }, TODAY, TODAY);
+
+  it("applies play state to the active board only", () => {
+    const shuffled = [...TILES].reverse();
+    const next = updateActive(start(), {
+      tiles: shuffled,
+      lockedRows: [true, false, false, false],
+      labels: ["fish", "", "", ""],
+    });
+    expect(next.boards[TODAY]).toEqual({
+      tiles: shuffled,
+      lockedRows: [true, false, false, false],
+      labels: ["fish", "", "", ""],
+      source: "daily",
+      date: TODAY,
+    });
+    expect(next.boards[YESTERDAY]).toEqual(daily(YESTERDAY));
+  });
+
+  it("returns the SAME store when nothing changed — the persist effect can skip", () => {
+    // Identity, not deep equality: the app's persist effect keys off it, so a
+    // regression here means a localStorage write on every render.
+    const store = start();
+    expect(updateActive(store, {})).toBe(store);
+    expect(updateActive(store, { tiles: TILES })).toBe(store);
+    expect(updateActive(store, { tiles: [...TILES], lockedRows: [...NO_LOCKS] })).toBe(store);
+  });
+
+  it("returns the SAME store when there is no active board", () => {
+    const store = storeOf({ [TODAY]: daily(TODAY) });
+    expect(updateActive(store, { labels: ["a", "b", "c", "d"] })).toBe(store);
+    const dangling = storeOf({ [TODAY]: daily(TODAY) }, YESTERDAY, TODAY);
+    expect(updateActive(dangling, { labels: ["a", "b", "c", "d"] })).toBe(dangling);
+    // Nothing loaded yet: the app's play handlers can fire before the launch
+    // fetch resolves, and a no-op is the right answer, not a crash.
+    expect(updateActive(null, { labels: ["a", "b", "c", "d"] })).toBe(null);
+  });
+
+  it("does not touch activeDate — playing a board is not activating it", () => {
+    // Otherwise a board touched today would resume tomorrow, which is the
+    // stale landing this whole store is designed to avoid.
+    const store = storeOf({ [YESTERDAY]: daily(YESTERDAY) }, YESTERDAY, YESTERDAY);
+    const next = updateActive(store, { lockedRows: [true, false, false, false] });
+    expect(next.activeDate).toBe(YESTERDAY);
+    expect(decideLaunch(next, TODAY)).toBe("fetch-today");
+  });
+
+  it("leaves the input store and its boards untouched", () => {
+    const before = deepFreeze(start());
+    const next = updateActive(before, { lockedRows: [true, true, true, true] });
+    expect(before.boards[TODAY].lockedRows).toEqual(NO_LOCKS);
+    expect(next.boards[YESTERDAY]).toBe(before.boards[YESTERDAY]);
+  });
+
+  it("rejects malformed play state instead of writing a board parse would drop", () => {
+    const store = start();
+    expect(() => updateActive(store, { tiles: TILES.slice(0, 15) })).toThrow(TypeError);
+    expect(() => updateActive(store, { lockedRows: [true] })).toThrow(TypeError);
+    expect(() => updateActive(store, { labels: "fish" })).toThrow(TypeError);
+  });
+});
+
+describe("resetActive", () => {
+  it("clears locks and labels but leaves the tiles where the player put them", () => {
+    const sorted = [...TILES].reverse();
+    const store = storeOf({ [TODAY]: played({ date: TODAY, tiles: sorted }) }, TODAY, TODAY);
+    const next = resetActive(store);
+    expect(next.boards[TODAY]).toEqual({
+      tiles: sorted,
+      lockedRows: NO_LOCKS,
+      labels: NO_LABELS,
+      source: "daily",
+      date: TODAY,
+    });
+  });
+
+  it("returns the SAME store when the board is already clear or nothing is active", () => {
+    const clean = storeOf({ [TODAY]: daily(TODAY) }, TODAY, TODAY);
+    expect(resetActive(clean)).toBe(clean);
+    const nothing = emptyStore();
+    expect(resetActive(nothing)).toBe(nothing);
+  });
+
+  it("resets only the active board", () => {
+    const store = storeOf(
+      { [TODAY]: played({ date: TODAY }), [YESTERDAY]: played({ date: YESTERDAY }) },
+      TODAY,
+      TODAY,
+    );
+    const next = resetActive(store);
+    expect(next.boards[YESTERDAY]).toEqual(store.boards[YESTERDAY]);
+  });
+});
+
+// ---- switcherEntries -----------------------------------------------------
+
+describe("switcherEntries", () => {
+  it("offers today and the two prior days, newest first", () => {
+    expect(switcherEntries(emptyStore(), TODAY)).toEqual([
+      { key: TODAY, label: "Today", dateText: "Sun, Aug 16", started: false, lockedCount: 0 },
+      { key: YESTERDAY, label: "Yesterday", dateText: "Sat, Aug 15", started: false, lockedCount: 0 },
+      { key: DAY_BEFORE, label: "Fri", dateText: "Fri, Aug 14", started: false, lockedCount: 0 },
+    ]);
+  });
+
+  it("marks the days with saved progress and counts their locked groups", () => {
+    const store = storeOf({
+      [TODAY]: daily(TODAY),
+      [DAY_BEFORE]: played({ date: DAY_BEFORE }),
+    });
+    const byKey = Object.fromEntries(switcherEntries(store, TODAY).map((e) => [e.key, e]));
+    expect(byKey[TODAY]).toMatchObject({ started: true, lockedCount: 0 });
+    expect(byKey[YESTERDAY]).toMatchObject({ started: false, lockedCount: 0 });
+    expect(byKey[DAY_BEFORE]).toMatchObject({ started: true, lockedCount: 2 });
+  });
+
+  it("appends a Custom segment only while a typed board exists", () => {
+    expect(switcherEntries(emptyStore(), TODAY).some((e) => e.key === CUSTOM_KEY)).toBe(false);
+    const withCustom = switcherEntries(
+      storeOf({ [CUSTOM_KEY]: played({ source: "manual", date: TODAY }) }, CUSTOM_KEY, TODAY),
+      TODAY,
+    );
+    expect(withCustom.at(-1)).toEqual({
+      key: CUSTOM_KEY,
+      label: "Custom",
+      dateText: "Your words",
+      started: true,
+      lockedCount: 2,
+    });
+  });
+
+  it("labels the third day by weekday, correctly across a DST change", () => {
+    // 2026-03-09 is the Monday after US DST begins; a local-zone date read
+    // would name the Sunday segment "Sat" for anyone west of UTC.
+    const entries = switcherEntries(emptyStore(), "2026-03-09");
+    expect(entries.map((e) => e.label)).toEqual(["Today", "Yesterday", "Sat"]);
+    expect(entries.map((e) => e.dateText)).toEqual(["Mon, Mar 9", "Sun, Mar 8", "Sat, Mar 7"]);
+  });
+
+  it("stops at launch day rather than offering a puzzle that never existed", () => {
+    const entries = switcherEntries(emptyStore(), "2023-06-13");
+    expect(entries.map((e) => e.key)).toEqual(["2023-06-13", "2023-06-12"]);
+    expect(entries.map((e) => e.label)).toEqual(["Today", "Yesterday"]);
+  });
+
+  it("renders before the first load resolves — a null store is just unstarted days", () => {
+    expect(switcherEntries(null, TODAY).every((e) => e.started === false)).toBe(true);
+    expect(switcherEntries(null, TODAY)).toHaveLength(3);
+  });
+
+  it("only ever offers keys the store can activate", () => {
+    // The UI taps straight through to activate(), which throws on a key that
+    // isn't there — so every started entry must be activatable.
+    const store = storeOf({ [YESTERDAY]: daily(YESTERDAY), [CUSTOM_KEY]: custom() }, null, null);
+    for (const entry of switcherEntries(store, TODAY).filter((e) => e.started)) {
+      expect(() => activate(store, entry.key, TODAY)).not.toThrow();
     }
   });
-
-  it("fetch-compares a legacy unknown-provenance board against today's words", () => {
-    // The pre-metadata save can't prove what it is; the fetch settles it via
-    // applyLegacyDaily. This branch is what reaches the bouncing cohort —
-    // users whose save never gets rewritten because they leave before
-    // loading anything new.
-    expect(decideLaunch(parseStore(legacyBlob()), TODAY)).toBe("fetch-compare");
-  });
-
-  it("resumes a legacy board re-entered via resume — exempt, never re-compared", () => {
-    const { current } = parseStore(legacyBlob());
-    const resumed = { current: { ...current, chosenExplicitly: true }, previous: null };
-    expect(decideLaunch(resumed, TODAY)).toBe("resume");
-  });
-
-  it("resumes rather than swaps when staleness can't be proven", () => {
-    // A daily board missing its date, or dated in the future (client clock
-    // skew), can't be shown to be stale — never yank those.
-    const dateless = { ...dailyBoard() };
-    delete dateless.date;
-    expect(decideLaunch({ current: dateless, previous: null }, TODAY)).toBe("resume");
-    const future = { current: dailyBoard({ date: "2026-06-10" }), previous: null };
-    expect(decideLaunch(future, TODAY)).toBe("resume");
-  });
 });
 
-describe("isStaleDaily", () => {
-  // The predicate behind both the launch fetch-swap and the refocus banner
-  // (a tab left open overnight): a non-exempt daily provably dated before
-  // today is the only board the app ever offers to replace.
-  const TODAY = "2026-06-09";
-
-  it("flags a non-exempt daily board dated before today", () => {
-    expect(isStaleDaily(dailyBoard({ date: "2026-06-08" }), TODAY)).toBe(true);
-  });
-
-  it("does not flag today's board, nor across-midnight until the date advances", () => {
-    const board = dailyBoard({ date: TODAY });
-    expect(isStaleDaily(board, TODAY)).toBe(false);
-    // The same board after ET midnight — the refocus check goes live.
-    expect(isStaleDaily(board, "2026-06-10")).toBe(true);
-  });
-
-  it("never flags exempt boards — chip-chosen, resumed, or untrusted sources", () => {
-    expect(isStaleDaily(dailyBoard({ date: "2026-06-05", chosenExplicitly: true }), TODAY)).toBe(false);
-    for (const source of ["ocr", "manual", "demo"]) {
-      expect(isStaleDaily(makeBoard(TILES, { source }), TODAY)).toBe(false);
-    }
-    expect(isStaleDaily(parseStore(legacyBlob()).current, TODAY)).toBe(false);
-  });
-
-  it("can't prove staleness without a date, or against clock skew", () => {
-    const dateless = { ...dailyBoard() };
-    delete dateless.date;
-    expect(isStaleDaily(dateless, TODAY)).toBe(false);
-    expect(isStaleDaily(dailyBoard({ date: "2026-06-10" }), TODAY)).toBe(false);
-  });
-
-  it("works on the app's metadata slice — no tiles required", () => {
-    // The refocus listener passes boardMeta ({date, source, chosenExplicitly}),
-    // not a full board.
-    expect(isStaleDaily({ date: "2026-06-08", source: "daily", chosenExplicitly: false }, TODAY)).toBe(true);
-  });
-});
-
-describe("swapBoards", () => {
-  // Today's board (auto-loaded, some sorting done) on screen; yesterday's
-  // half-played board waiting in the previous slot.
-  const todays = dailyBoard({ date: "2026-06-09" });
-  const yesterdays = dailyBoard({
-    tiles: [...TILES].reverse(),
-    date: "2026-06-08",
-    lockedRows: [true, true, false, false],
-    labels: ["fish", "birds", "", ""],
-  });
-
-  it("swaps losslessly and marks the re-entered board chosen-explicitly", () => {
-    const next = swapBoards({ current: todays, previous: yesterdays }, "2026-06-09");
-    // The resumed board comes back exactly as it was, now exempt from
-    // future auto-swaps; the outgoing board's own metadata is untouched.
-    expect(next.current).toEqual({ ...yesterdays, chosenExplicitly: true });
-    expect(next.previous).toEqual(todays);
-  });
-
-  it("is reversible — swapping back restores today's board and its progress", () => {
-    const there = swapBoards({ current: todays, previous: yesterdays }, "2026-06-09");
-    const back = swapBoards(there, "2026-06-09");
-    // Today's board returns intact but NOT exempt: re-entering today's
-    // puzzle isn't a choice of an old board, and exempting it would freeze
-    // the player on it tomorrow — the stale-board bounce all over again.
-    expect(back.current).toEqual({ ...todays, chosenExplicitly: false });
-    expect(back.previous).toEqual({ ...yesterdays, chosenExplicitly: true });
-  });
-
-  it("still auto-swaps tomorrow after a resume round-trip ends on today's board", () => {
-    const there = swapBoards({ current: todays, previous: yesterdays }, "2026-06-09");
-    const back = swapBoards(there, "2026-06-09");
-    expect(decideLaunch({ current: back.current, previous: back.previous }, "2026-06-10")).toBe(
-      "fetch-swap",
-    );
-  });
-
-  it("re-entering a dateless board still marks it chosen-explicitly", () => {
-    // A dateless board (ocr/manual/demo) re-entered via resume is marked
-    // chosen-explicitly like any other non-today board; its source already
-    // exempts it, so the flag is belt and suspenders.
-    const manual = makeBoard(TILES, { source: "manual" });
-    const next = swapBoards({ current: todays, previous: manual }, "2026-06-09");
-    expect(next.current.chosenExplicitly).toBe(true);
-  });
-
-  it("throws when there is no previous board to swap to", () => {
-    expect(() => swapBoards({ current: todays, previous: null })).toThrow();
-  });
-});
-
-describe("applyDailySwap", () => {
-  const FRESH_WORDS = Array.from({ length: 16 }, (_, i) => `NEW${i}`);
-
-  it("moves the stale board to previous and makes the fetched puzzle current", () => {
-    const stale = dailyBoard({ date: "2026-06-08", lockedRows: [true, false, false, false] });
-    const next = applyDailySwap(
-      { current: stale, previous: null },
-      { words: FRESH_WORDS, date: "2026-06-09" },
-    );
-    // Today's board starts fresh and swappable; the old board is preserved
-    // exactly, locks and all.
-    expect(next.current).toEqual(
-      makeBoard(FRESH_WORDS, { date: "2026-06-09", source: "daily" }),
-    );
-    expect(next.previous).toEqual(stale);
-  });
-
-  it("keeps only one previous slot — an older previous board is dropped", () => {
-    const stale = dailyBoard({ date: "2026-06-08" });
-    const ancient = dailyBoard({ date: "2026-06-01" });
-    const next = applyDailySwap(
-      { current: stale, previous: ancient },
-      { words: FRESH_WORDS, date: "2026-06-09" },
-    );
-    expect(next.previous).toEqual(stale);
-  });
-});
+// ---- sameWordSet ---------------------------------------------------------
 
 describe("sameWordSet", () => {
   it("matches regardless of tile order — sorting tiles is what the app does", () => {
@@ -397,7 +875,7 @@ describe("sameWordSet", () => {
     // N + combining tilde (NFD) — visually identical, different code points
     // — and canonicalization makes case and stray whitespace irrelevant.
     const composed = "EL NIÑO";
-    const decomposed = "EL NIN\u0303O"; // NFD, as an escape so no editor can re-compose it
+    const decomposed = "EL NIN\u0303O"; // NFD, escaped so no editor can re-compose it
     const rest = TILES.slice(1);
     expect(sameWordSet([composed, ...rest], [...rest, decomposed])).toBe(true);
     expect(sameWordSet(["el niño", ...rest], [composed, ...rest])).toBe(true);
@@ -418,168 +896,12 @@ describe("sameWordSet", () => {
   });
 });
 
-describe("applyLegacyDaily", () => {
-  const TODAY = "2026-06-09";
-
-  it("stamps a matching board in place — progress intact, now today's daily", () => {
-    // The bouncing-cohort happy path: their legacy board (locked row, label)
-    // holds today's words in whatever order they've sorted them into.
-    const saved = parseStore(legacyBlob());
-    const { matched, store } = applyLegacyDaily(saved, {
-      words: [...TILES].reverse(),
-      date: TODAY,
-    });
-    expect(matched).toBe(true);
-    expect(store.current).toEqual({ ...saved.current, date: TODAY, source: "daily" });
-    // Still not chosen-explicitly: tomorrow this board auto-swaps like any
-    // other auto-loaded daily.
-    expect(store.current.chosenExplicitly).toBe(false);
-    expect(store.previous).toBe(null);
-  });
-
-  it("after the stamp the board is today's: resumes today, swaps tomorrow", () => {
-    const { store } = applyLegacyDaily(parseStore(legacyBlob()), {
-      words: TILES,
-      date: TODAY,
-    });
-    const reloaded = parseStore(serializeStore(store));
-    expect(decideLaunch(reloaded, TODAY)).toBe("resume");
-    expect(decideLaunch(reloaded, "2026-06-10")).toBe("fetch-swap");
-  });
-
-  it("swaps a non-matching board out like any stale daily", () => {
-    const saved = parseStore(legacyBlob());
-    const todaysWords = Array.from({ length: 16 }, (_, i) => `NEW${i}`);
-    const { matched, store } = applyLegacyDaily(saved, { words: todaysWords, date: TODAY });
-    expect(matched).toBe(false);
-    expect(store.current).toEqual(makeBoard(todaysWords, { date: TODAY, source: "daily" }));
-    // The old board is recoverable via resume with its progress intact.
-    expect(store.previous).toEqual(saved.current);
-  });
-
-  it("leaves a matching board unstamped when the response carries no date", () => {
-    // A dateless "daily" board could never be proven stale by decideLaunch —
-    // stamping would freeze the user on it forever. Staying "unknown" means
-    // the next launch simply re-compares.
-    const saved = parseStore(legacyBlob());
-    const { matched, store } = applyLegacyDaily(saved, { words: TILES });
-    expect(matched).toBe(true);
-    expect(store.current).toEqual(saved.current);
-    expect(decideLaunch(store, TODAY)).toBe("fetch-compare");
-  });
-
-  it("an untouched store re-decides fetch-compare after a persist round-trip", () => {
-    // The fetch-failure retry contract. The failure branch never reaches
-    // this function — the app resumes the board untouched — so what must
-    // hold is that the unmodified store, persisted and reloaded, still
-    // decides fetch-compare.
-    const saved = parseStore(legacyBlob());
-    expect(decideLaunch(parseStore(serializeStore(saved)), TODAY)).toBe("fetch-compare");
-  });
-
-  it("leaves a matching board unstamped when the response date isn't ISO", () => {
-    // Same freeze-forever guard as the dateless case, for a malformed date.
-    const saved = parseStore(legacyBlob());
-    const { matched, store } = applyLegacyDaily(saved, { words: TILES, date: "June 9" });
-    expect(matched).toBe(true);
-    expect("date" in store.current).toBe(false);
-    expect(decideLaunch(store, TODAY)).toBe("fetch-compare");
-  });
-});
-
-describe("dateLabel", () => {
-  it("returns null when the board has no date", () => {
-    expect(dateLabel(undefined, "2026-06-09")).toBe(null);
-    expect(dateLabel(null, "2026-06-09")).toBe(null);
-  });
-
-  it("labels a board dated today as 'Today'", () => {
-    expect(dateLabel("2026-06-09", "2026-06-09")).toBe("Today");
-  });
-
-  it("labels an older board with abbreviated weekday + date", () => {
-    // The PRD's own example: Friday June 5 2026 → "Fri, Jun 5".
-    expect(dateLabel("2026-06-05", "2026-06-09")).toBe("Fri, Jun 5");
-    // Connections launch day, a known Monday.
-    expect(dateLabel("2023-06-12", "2026-06-09")).toBe("Mon, Jun 12");
-  });
-
-  it("flips from 'Today' to a dated label across the ET midnight boundary", () => {
-    // Same board, one tick after ET midnight: todayISO advances a day and the
-    // label must immediately stop claiming "Today".
-    expect(dateLabel("2026-06-09", "2026-06-10")).toBe("Tue, Jun 9");
-  });
-
-  it("returns null rather than throwing for a malformed date string", () => {
-    // In-memory boardMeta can carry a date the persist normalizer never saw;
-    // Intl.format throws a RangeError on an invalid Date, which here would be
-    // an uncaught render crash. Total beats throwing.
-    expect(dateLabel("garbage", "2026-06-09")).toBe(null);
-    expect(dateLabel("June 9", "2026-06-09")).toBe(null);
-    expect(dateLabel(42, "2026-06-09")).toBe(null);
-  });
-});
-
-describe("weekdayLong", () => {
-  it("names the weekday for the resume notice, DST-safe", () => {
-    // Friday June 5 2026 — same calendar math as dateLabel, so a local-zone
-    // regression would shift this for any user west of UTC.
-    expect(weekdayLong("2026-06-05")).toBe("Friday");
-    expect(weekdayLong("2023-06-12")).toBe("Monday"); // Connections launch day
-  });
-
-  it("returns null for missing or malformed dates — the notice falls back to generic copy", () => {
-    expect(weekdayLong(undefined)).toBe(null);
-    expect(weekdayLong(null)).toBe(null);
-    expect(weekdayLong("garbage")).toBe(null);
-  });
-});
+// ---- todayET -------------------------------------------------------------
 
 describe("todayET", () => {
-  // Mirrors worker/puzzle.test.js — the two implementations must agree, or
-  // the client could decide a board is stale while the worker still serves
-  // yesterday's puzzle (or vice versa).
-  it("rolls over at midnight Eastern, not UTC, during EDT", () => {
-    expect(todayET(new Date("2026-05-28T03:00:00Z"))).toBe("2026-05-27"); // 23:00 EDT
-    expect(todayET(new Date("2026-05-28T05:00:00Z"))).toBe("2026-05-28"); // 01:00 EDT
-  });
-
-  it("rolls over at midnight Eastern, not UTC, during EST", () => {
-    expect(todayET(new Date("2026-01-15T04:00:00Z"))).toBe("2026-01-14"); // 23:00 EST
-    expect(todayET(new Date("2026-01-15T06:00:00Z"))).toBe("2026-01-15"); // 01:00 EST
-  });
-});
-
-describe("boardSummary", () => {
-  it("joins the date label and locked-group progress for the resume card", () => {
-    const board = dailyBoard({ date: "2026-06-08", lockedRows: [true, true, false, false] });
-    expect(boardSummary(board, "2026-06-09")).toBe("Mon, Jun 8 · 2 groups locked");
-  });
-
-  it("labels a previous board dated today as Today — the swapped-back case", () => {
-    // After resuming yesterday's board, the menu card offers today's board
-    // back; its one default lock also pins the singular form.
-    expect(boardSummary(dailyBoard(), "2026-06-09")).toBe("Today · 1 group locked");
-  });
-
-  it("shows just the date when nothing is locked", () => {
-    const board = dailyBoard({ lockedRows: [false, false, false, false] });
-    expect(boardSummary(board, "2026-06-10")).toBe("Tue, Jun 9");
-  });
-
-  it("treats a malformed date like no date instead of throwing", () => {
-    expect(boardSummary({ ...dailyBoard(), date: "garbage" }, "2026-06-09")).toBe(
-      "1 group locked",
-    );
-  });
-
-  it("never renders an empty line — progress alone, or a generic nudge", () => {
-    // A dateless board (ocr/manual/demo/legacy) still summarizes its locks;
-    // with nothing at all, the card gets a friendly fallback.
-    const legacy = parseStore(legacyBlob()).current;
-    expect(boardSummary(legacy, "2026-06-09")).toBe("1 group locked");
-    expect(boardSummary(makeBoard(TILES, { source: "manual" }), "2026-06-09")).toBe(
-      "Pick up where you left off",
-    );
+  it("is the shared implementation, re-exported for app convenience", () => {
+    // Behavior (ET rollover, DST) is tested in shared/puzzleDates.test.js;
+    // what matters here is that the client and the Worker can't drift.
+    expect(todayET).toBe(sharedTodayET);
   });
 });

@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'public/tesseract']),
+  globalIgnores(['dist']),
   // React app code.
   {
     files: ['src/**/*.{js,jsx}'],
@@ -19,10 +19,11 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
   },
-  // Worker + build/dev tooling — plain JS on web + node globals, no React
-  // fast-refresh constraints.
+  // Shared modules + worker + build/dev tooling — plain JS on web + node
+  // globals, no React fast-refresh constraints. shared/ is imported from both
+  // the worker and src/, so it lives by the stricter (framework-free) rules.
   {
-    files: ['worker/**/*.js', '*.config.js'],
+    files: ['shared/**/*.js', 'worker/**/*.js', '*.config.js'],
     extends: [js.configs.recommended],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },

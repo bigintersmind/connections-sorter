@@ -1,18 +1,58 @@
 // Saved-puzzle store: the persisted board schema and all reasoning about it.
 //
-// Owns the two-slot shape written under the "connections-puzzle" localStorage
-// key — { current, previous? } — where each board carries the play state
-// (tiles, lockedRows, labels) plus provenance metadata (date, source,
-// chosenExplicitly). Pure and framework-free so it can be unit-tested without
-// a DOM, like worker/puzzle.js; the app component stays a thin wiring layer.
+// Owns the v2 per-day shape written under the "connections-puzzle" localStorage
+// key — { version, boards, active, activeDate } — where `boards` maps a key to
+// one board's play state (tiles, lockedRows, labels) plus its provenance
+// (source, date). A key is either a puzzle date in ISO form (that day's board)
+// or CUSTOM_KEY, the single slot for words the player typed in themselves. On
+// top of the schema this module owns every decision that depends on it: the
+// launch rule, day switching, the adopt-on-match merge, window pruning, and
+// the switcher's labels. Pure and framework-free so it can be unit-tested
+// without a DOM, like worker/puzzle.js; the app component stays a thin wiring
+// layer. Date arithmetic and the window size come from shared/puzzleDates.js,
+// the same module the Worker's date gate uses.
+//
+// `activeDate` is the ET date the active board was *activated* on (switched to
+// or created), never "last touched". The launch rule is "same ET day → resume,
+// new ET day → open Today"; under a last-touched stamp, a player who poked at
+// Friday's board on Saturday would be resumed onto Friday's board on Sunday —
+// exactly the stale-board landing this store exists to prevent.
 
-// Parse the raw localStorage string into { current, previous } — or null for
-// anything unusable (no save, junk JSON, malformed boards) — the same
-// null-for-bad-data posture as the old loadSaved, tightened to also reject
-// non-string tiles. A legacy flat { tiles, lockedRows, labels } blob becomes
-// a current board with source "unknown" — that exact string is how
-// decideLaunch's "fetch-compare" branch recognizes a pre-metadata save.
-export function parseStore(raw) {
+import { earliestAllowedDate, isIsoDate, todayET, windowDates } from "../shared/puzzleDates.js";
+
+// Re-exported so app code has one import for "everything about the saved
+// board", and so there stays exactly one todayET implementation.
+export { todayET };
+
+export const STORE_VERSION = 2;
+
+// The one non-date key: words the player typed in (manual entry, or the
+// fallback when a fetch fails). Only ever one — a second typed board replaces
+// the first.
+export const CUSTOM_KEY = "custom";
+
+// "unknown" exists only for boards migrated from a save that predates
+// provenance metadata; nothing writes it going forward.
+const SOURCES = new Set(["daily", "manual", "unknown"]);
+
+// The pre-v2 vocabulary, kept only so migration can read old saves.
+const LEGACY_SOURCES = new Set(["daily", "ocr", "manual", "demo", "unknown"]);
+
+export function emptyStore() {
+  return { version: STORE_VERSION, boards: {}, active: null, activeDate: null };
+}
+
+// Parse the raw localStorage string into a v2 store — or null when there is
+// nothing to read at all (no save, junk JSON, a non-object). A readable save
+// with no surviving boards — an empty v2 store, a week-old save whose days
+// have all aged out — is a *valid empty store*, not a bad one: the app
+// persists an empty store whenever no board is on screen, so treating it as
+// unreadable would raise a false corruption warning on every reload.
+// `todayISO` is required because migration has to date boards that never
+// carried a date, and because parsing always prunes: a save that's been
+// sitting for a week must not resurrect boards the switcher can no longer
+// show.
+export function parseStore(raw, todayISO) {
   if (!raw) return null;
   let data;
   try {
@@ -20,114 +60,190 @@ export function parseStore(raw) {
   } catch {
     return null;
   }
-  if (!data || typeof data !== "object") return null;
-  // Presence of `current` discriminates the two-slot shape from a legacy flat
-  // blob. A corrupt current slot is no save; a corrupt previous slot is
-  // dropped alone — never take the user's live board down with it.
-  if ("current" in data) {
-    const current = normalizeBoard(data.current);
-    if (!current) return null;
-    return { current, previous: normalizeBoard(data.previous) };
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+
+  // Three shapes have been written under this key. `boards`/version 2 is the
+  // current one; `current` is the two-slot shape; a bare `tiles` blob is the
+  // original pre-metadata save.
+  let store;
+  if (data.version === STORE_VERSION || "boards" in data) store = normalizeStore(data);
+  else if ("current" in data) store = migrateTwoSlot(data, todayISO);
+  else store = migrateFlat(data, todayISO);
+
+  return pruneStore(store, todayISO);
+}
+
+// Serialize a store for localStorage. Every board goes through the same
+// validator parse uses, so whatever this writes is guaranteed to read back
+// equal — persist and resume can't drift. Total by design: this runs inside a
+// persist effect on every keystroke-ish state change, so a malformed board
+// drops out quietly rather than throwing mid-render (the loud guards live on
+// the writers — placeFetched/setCustom/updateActive — where a bad value is a
+// programming error, not accumulated user data).
+export function serializeStore(store) {
+  return JSON.stringify(normalizeStore(store));
+}
+
+// Drop everything outside the loadable window: daily boards older than the
+// floor (they're no longer reachable from the switcher, so they'd be dead
+// weight the player can't see) and daily boards dated after today (client
+// clock skew). Custom boards age out by the date they were entered. A dropped
+// active board leaves nothing on screen, so the launch rule falls back to
+// opening Today.
+export function pruneStore(store, todayISO) {
+  const earliest = earliestAllowedDate(todayISO);
+  const boards = {};
+  for (const [key, board] of Object.entries(store.boards)) {
+    if (key === CUSTOM_KEY) {
+      if (board.date < earliest) continue;
+    } else if (key < earliest || key > todayISO) {
+      continue;
+    }
+    boards[key] = board;
   }
-  // Legacy flat blob: normalizing it directly yields exactly the migration
-  // contract — source "unknown", chosenExplicitly false, no date.
-  const current = normalizeBoard(data);
-  if (!current) return null;
-  return { current, previous: null };
-}
-
-// The exemption rule shared by every auto-swap/banner slice: a board the
-// player chose explicitly (past-date chip, or re-entered via resume), or one
-// with no trusted date (ocr/manual/demo), is never swapped out or nagged.
-export function isExempt(board) {
-  return (
-    board.chosenExplicitly === true ||
-    board.source === "ocr" ||
-    board.source === "manual" ||
-    board.source === "demo"
-  );
-}
-
-// What the app should do at page load, given the parsed save (or null) and
-// today's ET date:
-//   "fetch-today"   — no save; fetch and land on today's board (existing flow).
-//   "fetch-swap"    — current board is a non-exempt daily provably dated before
-//                     today: fetch today, move the old board to the previous
-//                     slot, offer resume.
-//   "fetch-compare" — non-exempt pre-metadata save: fetch today and settle what
-//                     the board is by word comparison (applyLegacyDaily). Fetch
-//                     failure resumes it untouched and unstamped, so this
-//                     decision simply repeats next launch.
-//   "resume"        — everything else, including boards whose staleness can't
-//                     be proven (no date, future date).
-export function decideLaunch(saved, todayISO) {
-  if (!saved) return "fetch-today";
-  const { current } = saved;
-  if (isExempt(current)) return "resume";
-  if (current.source === "unknown") return "fetch-compare";
-  if (isStaleDaily(current, todayISO)) return "fetch-swap";
-  return "resume";
-}
-
-// A non-exempt daily board provably dated before today — the only kind of
-// board the app ever offers to replace. Shared by the launch decision
-// (fetch-swap) and the refocus listener (the "Today's puzzle is ready"
-// banner on a tab left open overnight). Self-contained: it re-checks
-// exemption, and a dateless or future-dated board (client clock skew) can't
-// be proven stale, so it's never flagged. Needs only the metadata fields, so
-// the app can pass its boardMeta slice rather than a full board.
-export function isStaleDaily(board, todayISO) {
-  return (
-    !isExempt(board) &&
-    board.source === "daily" &&
-    typeof board.date === "string" &&
-    board.date < todayISO
-  );
-}
-
-// Apply a successful daily fetch on the "fetch-swap" launch path: the stale
-// board moves to the previous slot (intact — this is what makes the resume
-// notice lossless) and the fetched puzzle becomes a fresh, swappable current.
-// One previous slot only, never an archive: any older previous is dropped.
-export function applyDailySwap(saved, { words, date }) {
+  const active = store.active && Object.hasOwn(boards, store.active) ? store.active : null;
   return {
-    current: makeBoard(words, { date, source: "daily", chosenExplicitly: false }),
-    previous: saved.current,
+    version: STORE_VERSION,
+    boards,
+    active,
+    activeDate: active ? store.activeDate : null,
   };
 }
 
-// Resolve a legacy (pre-metadata) save against the day's fetched puzzle — the
-// "fetch-compare" launch path. This is what reaches the bouncing cohort: their
-// save never gets rewritten because they leave before loading anything new, so
-// only a word comparison can tell whether their board is already today's.
-// Matching words mean it is: keep it in place, progress intact, and stamp
-// provenance (server date, source "daily", still swappable tomorrow).
-// Different words mean it's genuinely stale: the standard daily swap, old
-// board to the previous slot. Returns { matched, store } so the app knows
-// whether to keep the board on screen or load the new one with the notice.
-export function applyLegacyDaily(saved, { words, date }) {
-  if (!sameWordSet(saved.current.tiles, words)) {
-    return { matched: false, store: applyDailySwap(saved, { words, date }) };
-  }
-  // No trusted server date → don't stamp: a dateless "daily" board can never
-  // be proven stale by decideLaunch, which would freeze the user on this
-  // board forever. Staying "unknown" just re-compares on the next launch.
-  if (typeof date !== "string" || !ISO_DATE.test(date)) {
-    return { matched: true, store: { current: saved.current, previous: saved.previous ?? null } };
-  }
-  return {
-    matched: true,
-    store: {
-      current: { ...saved.current, date, source: "daily" },
-      previous: saved.previous ?? null,
-    },
-  };
+// What the app should do at page load:
+//   "resume"      — the board the player was last on, on this same ET day.
+//   "fetch-today" — everything else: no save, a board from a previous day, or
+//                   an active key whose board didn't survive pruning.
+// One rule, no exemptions: a new ET day always opens Today, and the previous
+// day's board is still one tap away in the switcher rather than being
+// something the app has to reason about.
+export function decideLaunch(store, todayISO) {
+  if (!hasBoard(store, store?.active)) return "fetch-today";
+  return store.activeDate === todayISO ? "resume" : "fetch-today";
 }
 
-// Order-insensitive comparison of two tile lists — the heart of the legacy
-// migration, where tile order means nothing (sorting tiles is what the app is
-// for). Words are canonicalized first: Unicode-composed (so "EL NIÑO" saved
-// as a precomposed Ñ matches one built from N + combining tilde), whitespace
+// Switch to a board that already exists — the instant, no-network half of the
+// switcher. Immutable: the outgoing board keeps its play state untouched, so
+// switching back is lossless in both directions. A missing key is a
+// programming error (the UI only offers keys it got from switcherEntries).
+export function activate(store, key, todayISO) {
+  if (!hasBoard(store, key)) throw new TypeError(`activate: no board for "${key}"`);
+  return { ...store, active: key, activeDate: todayISO };
+}
+
+// Place a successful fetch for `date` and switch to it. Three cases:
+//   - a board for that date already exists → leave it exactly as it is (the
+//     fetch was only needed to find that out; never overwrite progress);
+//   - adopt-on-match: the custom board holds the same 16 words, so it IS this
+//     day's puzzle — typed during an outage, or a pre-metadata save. Its
+//     progress becomes the day's board and the custom slot is cleared, so the
+//     player doesn't end up with a duplicate board and a stray Custom segment;
+//   - otherwise a fresh board from the fetched words, in NYT's board order.
+// The argument checks are programming-error guards (the app validates the
+// network response before calling), same posture as the old makeBoard.
+export function placeFetched(store, { date, words }, todayISO) {
+  if (!isIsoDate(date)) throw new TypeError("placeFetched: date must be YYYY-MM-DD");
+  if (!isTiles(words)) throw new TypeError("placeFetched: words must be 16 strings");
+
+  let next = store;
+  if (!hasBoard(store, date)) {
+    const boards = { ...store.boards };
+    const custom = boards[CUSTOM_KEY];
+    if (custom && sameWordSet(custom.tiles, words)) {
+      boards[date] = { ...custom, source: "daily", date };
+      delete boards[CUSTOM_KEY];
+    } else {
+      boards[date] = freshBoard(words, "daily", date);
+    }
+    next = { ...store, boards };
+  }
+  return activate(next, date, todayISO);
+}
+
+// Create or replace the custom board from typed words and switch to it. It is
+// stamped with today's ET date, which is what ages it out of the window later
+// — a typed board is not tied to any puzzle date, so its own age is all we
+// have to expire it by.
+export function setCustom(store, words, todayISO) {
+  if (!isTiles(words)) throw new TypeError("setCustom: words must be 16 strings");
+  if (!isIsoDate(todayISO)) throw new TypeError("setCustom: todayISO must be YYYY-MM-DD");
+  const boards = { ...store.boards, [CUSTOM_KEY]: freshBoard(words, "manual", todayISO) };
+  return activate({ ...store, boards }, CUSTOM_KEY, todayISO);
+}
+
+// Apply play state (any subset of tiles/lockedRows/labels) to the active
+// board. Returns the SAME store object when there is no active board or
+// nothing actually changed, so the app's persist effect can skip a write by
+// identity instead of diffing. Never touches activeDate: playing a board is
+// not activating it (see the header comment).
+export function updateActive(store, patch) {
+  const key = store?.active;
+  if (!hasBoard(store, key)) return store;
+  const board = store.boards[key];
+
+  const next = { ...board };
+  let changed = false;
+  if (patch.tiles !== undefined) {
+    if (!isTiles(patch.tiles)) throw new TypeError("updateActive: tiles must be 16 strings");
+    if (!sameValues(board.tiles, patch.tiles)) {
+      next.tiles = patch.tiles;
+      changed = true;
+    }
+  }
+  if (patch.lockedRows !== undefined) {
+    if (!isLockedRows(patch.lockedRows)) {
+      throw new TypeError("updateActive: lockedRows must be 4 booleans");
+    }
+    if (!sameValues(board.lockedRows, patch.lockedRows)) {
+      next.lockedRows = patch.lockedRows;
+      changed = true;
+    }
+  }
+  if (patch.labels !== undefined) {
+    if (!isLabels(patch.labels)) throw new TypeError("updateActive: labels must be 4 strings");
+    if (!sameValues(board.labels, patch.labels)) {
+      next.labels = patch.labels;
+      changed = true;
+    }
+  }
+  if (!changed) return store;
+  return { ...store, boards: { ...store.boards, [key]: next } };
+}
+
+// Clear the active board's locks and labels, keeping its tiles where the
+// player left them (Reset unlocks the puzzle, it doesn't re-deal it). Same
+// same-object-when-nothing-changes rule as updateActive.
+export function resetActive(store) {
+  return updateActive(store, { lockedRows: noLocks(), labels: noLabels() });
+}
+
+// The day switcher's segments, left to right: today and the two prior days,
+// then Custom if a typed board exists. Segments render for days with no saved
+// board too (tapping one fetches it), so `started`/`lockedCount` are what the
+// progress marker reads. Tolerates a null store so the switcher can render
+// before the first load resolves.
+export function switcherEntries(store, todayISO) {
+  const entries = windowDates(todayISO).map((date, index) => ({
+    key: date,
+    label: index === 0 ? "Today" : index === 1 ? "Yesterday" : formatISO(date, WEEKDAY_SHORT),
+    dateText: formatISO(date, DATE_TEXT),
+    ...progressOf(store, date),
+  }));
+  if (hasBoard(store, CUSTOM_KEY)) {
+    entries.push({
+      key: CUSTOM_KEY,
+      label: "Custom",
+      dateText: "Your words",
+      ...progressOf(store, CUSTOM_KEY),
+    });
+  }
+  return entries;
+}
+
+// Order-insensitive comparison of two tile lists — the heart of adopt-on-match,
+// where tile order means nothing (sorting tiles is what the app is for). Words
+// are canonicalized first: Unicode-composed (so "EL NIÑO" saved as a
+// precomposed Ñ matches one built from N + combining tilde), whitespace
 // collapsed, uppercased. Compared as sorted arrays, not Sets, so duplicate
 // words must match in count too.
 export function sameWordSet(a, b) {
@@ -137,141 +253,176 @@ export function sameWordSet(a, b) {
   return ca.every((word, i) => word === cb[i]);
 }
 
-function canonicalWord(word) {
-  return String(word).normalize("NFC").replace(/\s+/g, " ").trim().toUpperCase();
-}
+// ---- internals -----------------------------------------------------------
 
-// Lossless swap of current ↔ previous. The re-entered board is marked
-// chosen-explicitly — resuming is a deliberate choice, so it's exempt from
-// future auto-swaps — while the outgoing board keeps its own metadata
-// unchanged, so swapping back loses no play state.
-//
-// Exception: re-entering the daily board dated `todayISO` is not a choice of
-// an old board, so it comes back *not* exempt. Exempting it would silently
-// resume it tomorrow morning — recreating the stale-board bounce for exactly
-// the players who used resume and then swapped back to today.
-export function swapBoards({ current, previous }, todayISO) {
-  if (!previous) throw new TypeError("swapBoards: no previous board");
-  const isTodaysDaily = previous.source === "daily" && previous.date === todayISO;
-  return {
-    current: { ...previous, chosenExplicitly: !isTodaysDaily },
-    previous: current,
-  };
-}
+const WEEKDAY_SHORT = { weekday: "short" };
+const DATE_TEXT = { weekday: "short", month: "short", day: "numeric" };
 
-// Build a fresh board (no locks, no labels) from 16 words plus provenance:
-// `date` (daily boards only — the Worker's server-resolved print date, never
-// the client clock), `source`, and `chosenExplicitly` (true means the player
-// deliberately picked this board — in the app, only the past-date chips set
-// it at load time, and they stamp their meta inline rather than through here).
-export function makeBoard(tiles, { date, source, chosenExplicitly = false }) {
-  const board = normalizeBoard({ tiles, date, source, chosenExplicitly });
-  if (!board) throw new TypeError("makeBoard: invalid tiles");
-  return board;
-}
-
-// Serialize { current, previous } for localStorage. Boards pass through the
-// same normalizer as parse, so whatever this writes is guaranteed to read
-// back equal — persist and resume can't drift. An invalid current board is a
-// programming error, not user data: throw rather than silently write garbage.
-export function serializeStore({ current, previous = null }) {
-  const board = normalizeBoard(current);
-  if (!board) throw new TypeError("serializeStore: invalid current board");
-  const prev = normalizeBoard(previous);
-  return JSON.stringify(prev ? { current: board, previous: prev } : { current: board });
-}
-
-const SOURCES = new Set(["daily", "ocr", "manual", "demo", "unknown"]);
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-// Validate one board into canonical form, or null if it isn't one. Tiles are
-// the save — invalid tiles reject the board. Everything else degrades softly:
-// bad locks/labels reset, an unrecognized source becomes "unknown", a
-// non-boolean chosenExplicitly becomes false, a non-ISO date is dropped.
-function normalizeBoard(b) {
-  if (!b || typeof b !== "object" || !isTiles(b.tiles)) return null;
-  const board = {
-    tiles: b.tiles,
-    lockedRows: lockedRowsOrDefault(b.lockedRows),
-    labels: labelsOrDefault(b.labels),
-    source: SOURCES.has(b.source) ? b.source : "unknown",
-    chosenExplicitly: b.chosenExplicitly === true,
-  };
-  if (typeof b.date === "string" && ISO_DATE.test(b.date)) board.date = b.date;
-  return board;
-}
-
-// Exactly 16 strings — every writer in the app (worker fetch, OCR, manual
-// parse, demo) produces strings, so anything else is corruption, not a board.
-function isTiles(tiles) {
-  return Array.isArray(tiles) && tiles.length === 16 && tiles.every((t) => typeof t === "string");
-}
-
-// Locks and labels are recoverable decoration: a corrupt value falls back to
-// defaults rather than discarding the user's 16 words with it.
-function lockedRowsOrDefault(v) {
-  return Array.isArray(v) && v.length === 4 && v.every((b) => typeof b === "boolean")
-    ? v
-    : [false, false, false, false];
-}
-
-function labelsOrDefault(v) {
-  return Array.isArray(v) && v.length === 4 && v.every((s) => typeof s === "string")
-    ? v
-    : ["", "", "", ""];
-}
-
-// One-line summary of a board for the menu's resume card: the date label when
-// the board has one, plus locked-group progress when there is any — "Today ·
-// 2 groups locked", "Mon, Jun 8", "1 group locked" — with a generic nudge for
-// a dateless, lockless board so the card never renders an empty line.
-export function boardSummary(board, todayISO) {
-  const parts = [];
-  const label = dateLabel(board.date, todayISO);
-  if (label) parts.push(label);
-  const locked = board.lockedRows.filter(Boolean).length;
-  if (locked > 0) parts.push(`${locked} ${locked === 1 ? "group" : "groups"} locked`);
-  return parts.length ? parts.join(" · ") : "Pick up where you left off";
-}
-
-// Board-header label for a dated board. `todayISO` is supplied by the caller
-// (todayET()) so this stays pure calendar math — no clock reads. Total: a
-// missing or non-ISO date returns null rather than letting Intl throw a
-// RangeError mid-render (boardMeta can hold an in-memory date the persist
-// normalizer never saw).
-export function dateLabel(dateISO, todayISO) {
-  if (typeof dateISO !== "string" || !ISO_DATE.test(dateISO)) return null;
-  if (dateISO === todayISO) return "Today";
-  // Format from the ISO parts in UTC — never `new Date(dateISO)` through the
-  // local zone, which would shift the calendar day for some users (the same
-  // DST-safe trick the menu's recent-date chips use).
+// Format an ISO date via Intl in UTC — never `new Date(iso)` read through the
+// local zone, which shifts the calendar day for anyone west of UTC and would
+// mislabel the switcher's segments for a whole evening.
+function formatISO(dateISO, options) {
   const [y, m, d] = dateISO.split("-").map(Number);
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(Date.UTC(y, m - 1, d)));
-}
-
-// Full weekday for the resume notice ("Resume Monday's board"), formatted
-// from the ISO parts in UTC like dateLabel — and total the same way: null
-// for a missing or malformed date, so the notice falls back to its generic
-// "Resume previous board" copy instead of crashing.
-export function weekdayLong(dateISO) {
-  if (typeof dateISO !== "string" || !ISO_DATE.test(dateISO)) return null;
-  const [y, m, d] = dateISO.split("-").map(Number);
-  return new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: "UTC" }).format(
+  return new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" }).format(
     new Date(Date.UTC(y, m - 1, d)),
   );
 }
 
-// Today's date (YYYY-MM-DD) in America/New_York — the module's single clock
-// seam, injectable for tests. Mirrors worker/puzzle.js's todayET: the puzzle
-// day rolls over at midnight Eastern, and this value feeds decideLaunch,
-// isStaleDaily, and swapBoards, so a wrong zone here means a wrong puzzle,
-// not just a wrong label.
-export function todayET(now = new Date()) {
-  // en-CA formats as YYYY-MM-DD.
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(now);
+// `Object.hasOwn`, not a truthiness check: `store.boards["constructor"]` is
+// truthy on a plain object, and `active` can be any string from a hand-edited
+// save.
+function hasBoard(store, key) {
+  return Boolean(
+    store && store.boards && typeof key === "string" && Object.hasOwn(store.boards, key),
+  );
+}
+
+function progressOf(store, key) {
+  if (!hasBoard(store, key)) return { started: false, lockedCount: 0 };
+  return { started: true, lockedCount: store.boards[key].lockedRows.filter(Boolean).length };
+}
+
+function freshBoard(tiles, source, date) {
+  return { tiles, lockedRows: noLocks(), labels: noLabels(), source, date };
+}
+
+// Validate a whole store into canonical form. Shared by parse and serialize so
+// the two can't drift, and lenient per board: one corrupt entry is dropped
+// alone, never taking the rest of the player's days down with it.
+function normalizeStore(data) {
+  if (!data || typeof data !== "object") return emptyStore();
+  const source = data.boards && typeof data.boards === "object" ? data.boards : {};
+  const boards = {};
+  for (const [key, value] of Object.entries(source)) {
+    const board = normalizeBoard(key, value);
+    if (board) boards[key] = board;
+  }
+  const active =
+    typeof data.active === "string" && Object.hasOwn(boards, data.active) ? data.active : null;
+  return {
+    version: STORE_VERSION,
+    boards,
+    active,
+    // Meaningless without an active board, and a non-ISO stamp would make the
+    // launch comparison unfalsifiable — drop both rather than trust them.
+    activeDate: active && isIsoDate(data.activeDate) ? data.activeDate : null,
+  };
+}
+
+// Validate one keyed board, or null if it isn't one. Tiles are the save —
+// invalid tiles reject the board. Locks and labels are recoverable decoration
+// and reset to defaults instead. The key decides the rest: a daily board takes
+// its date FROM its key (the two can never drift), while the custom board
+// carries the ET date it was typed on, which is the only thing that can age it
+// out — a custom board without one would live forever, so it's rejected.
+function normalizeBoard(key, b) {
+  const isDailyKey = isIsoDate(key);
+  if (!isDailyKey && key !== CUSTOM_KEY) return null;
+  if (!b || typeof b !== "object" || !isTiles(b.tiles)) return null;
+  const date = isDailyKey ? key : isIsoDate(b.date) ? b.date : null;
+  if (!date) return null;
+  return {
+    tiles: b.tiles,
+    lockedRows: isLockedRows(b.lockedRows) ? b.lockedRows : noLocks(),
+    labels: isLabels(b.labels) ? b.labels : noLabels(),
+    source: SOURCES.has(b.source) ? b.source : "unknown",
+    date,
+  };
+}
+
+// Migrate the two-slot { current, previous } shape. Each slot lands under its
+// own key — a dated daily board under its date, anything else (ocr/manual/demo,
+// or a daily that never recorded a date) in the custom slot — so both boards
+// survive with their progress intact. `current` goes first, so it wins any
+// collision and it is what the store reopens on.
+function migrateTwoSlot(data, todayISO) {
+  const store = emptyStore();
+  for (const [slot, isCurrent] of [
+    [data.current, true],
+    [data.previous, false],
+  ]) {
+    const board = readLegacyBoard(slot);
+    if (!board) continue;
+    const asDaily = board.source === "daily" && board.date !== null;
+    const key = asDaily ? board.date : CUSTOM_KEY;
+    if (!Object.hasOwn(store.boards, key)) {
+      store.boards[key] = {
+        tiles: board.tiles,
+        lockedRows: board.lockedRows,
+        labels: board.labels,
+        // ocr/demo/manual all become "manual" (words the player supplied, no
+        // puzzle date); a board that never recorded where it came from stays
+        // "unknown" rather than being given a provenance it didn't have.
+        // Neither value changes behavior — adopt-on-match goes by words alone.
+        source: asDaily ? "daily" : board.source === "unknown" ? "unknown" : "manual",
+        date: asDaily ? board.date : todayISO,
+      };
+    }
+    if (isCurrent) {
+      store.active = key;
+      // Only a daily board dated today proves the player was on today's
+      // puzzle; anything else opens Today on this first launch, with the old
+      // board preserved under its own key one tap away.
+      store.activeDate = asDaily && board.date === todayISO ? todayISO : null;
+    }
+  }
+  return store;
+}
+
+// Migrate the original flat { tiles, lockedRows, labels } blob. It carries no
+// provenance at all, so it becomes the custom board and the app opens Today —
+// and if its words turn out to be today's puzzle, adopt-on-match folds it into
+// today's board on the first fetch, progress and all.
+function migrateFlat(data, todayISO) {
+  const store = emptyStore();
+  const board = readLegacyBoard(data);
+  if (board) {
+    store.boards[CUSTOM_KEY] = {
+      tiles: board.tiles,
+      lockedRows: board.lockedRows,
+      labels: board.labels,
+      source: "unknown",
+      date: todayISO,
+    };
+  }
+  return store;
+}
+
+// Read a board out of a pre-v2 save, where provenance lived on the board
+// itself rather than in the key. Returns the old fields verbatim (the caller
+// maps them into the new shape) or null if the tiles aren't a board.
+function readLegacyBoard(b) {
+  if (!b || typeof b !== "object" || !isTiles(b.tiles)) return null;
+  return {
+    tiles: b.tiles,
+    lockedRows: isLockedRows(b.lockedRows) ? b.lockedRows : noLocks(),
+    labels: isLabels(b.labels) ? b.labels : noLabels(),
+    source: LEGACY_SOURCES.has(b.source) ? b.source : "unknown",
+    date: isIsoDate(b.date) ? b.date : null,
+  };
+}
+
+// Exactly 16 strings — every writer (worker fetch, manual entry) produces
+// strings, so anything else is corruption, not a board.
+function isTiles(tiles) {
+  return Array.isArray(tiles) && tiles.length === 16 && tiles.every((t) => typeof t === "string");
+}
+
+function isLockedRows(v) {
+  return Array.isArray(v) && v.length === 4 && v.every((b) => typeof b === "boolean");
+}
+
+function isLabels(v) {
+  return Array.isArray(v) && v.length === 4 && v.every((s) => typeof s === "string");
+}
+
+const noLocks = () => [false, false, false, false];
+const noLabels = () => ["", "", "", ""];
+
+// Element-wise comparison of two same-shaped arrays, so updateActive can tell
+// a real change from a re-render handing back identical values.
+const sameValues = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+function canonicalWord(word) {
+  return String(word).normalize("NFC").replace(/\s+/g, " ").trim().toUpperCase();
 }

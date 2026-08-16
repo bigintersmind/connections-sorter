@@ -5,58 +5,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev      # Vite dev server at http://localhost:5173 (predev mirrors Tesseract assets)
-npm run build    # Production build → ./dist (prebuild mirrors Tesseract assets)
+npm run dev      # Vite dev server at http://localhost:5173
+npm run build    # Production build → ./dist
 npm run lint     # ESLint over .js/.jsx
 npm test         # Vitest (run once) — the pure-module suites listed below
 npm run preview  # Serve the built ./dist locally
 ```
 
-Vitest covers three pure modules — `worker/puzzle.js` (the puzzle fetch/transform + date-window logic, via an injectable `fetchImpl`), `src/fitTileFont.js` (the tile shrink-to-fit loop, fed stub elements), and `src/savedPuzzle.js` (the persisted-board schema, launch decision, swap/stamp mechanics, and date labels) — so no jsdom is needed. The worker handler, the Vite dev middleware, and `src/App.jsx`'s async load logic are **not** yet covered. Lint still runs over everything; `**/*.test.js` gets Vitest globals in `eslint.config.js`.
+Vitest covers four pure modules — `worker/puzzle.js` (the puzzle fetch/transform + date-window logic, via an injectable `fetchImpl`), `shared/puzzleDates.js` (today-in-ET, add-days, and the 3-day window constants, shared by the Worker and the client so the two can't drift), `src/fitTileFont.js` (the tile shrink-to-fit loop, fed stub elements), and `src/savedPuzzle.js` (the per-day saved-board store: schema + migration, the launch rule, day switching, adopt-on-match, and switcher entries) — so no jsdom is needed. The App component (day switcher, overflow menu, failure states) is verified **by hand in the browser**, not under jsdom; the worker handler and the Vite dev middleware are uncovered too. Lint still runs over everything; `**/*.test.js` gets Vitest globals in `eslint.config.js`.
 
 ## Architecture
 
-Single-page React 19 + Vite app. Most logic lives in `src/App.jsx` — the root component, the upload screen, the OCR pipeline, and an inline `styles` object. Pure, framework-free helpers are extracted so they can be unit-tested without a DOM: `src/clipboardImage.js` (clipboard/paste MIME policy), `src/fitTileFont.js` (tile shrink-to-fit), and `src/savedPuzzle.js` (the saved-board store, launch decision, and date labels). There is no router, no state library, no CSS framework. State persists to `localStorage` under `connections-puzzle`.
+Single-page React 19 + Vite app. Two screens, both in `src/App.jsx` — the **board**, which is the home screen, and **manual word entry**, reachable only from the overflow menu or the fetch-failure state — plus an inline `styles` object. Pure, framework-free helpers are extracted so they can be unit-tested without a DOM: `src/fitTileFont.js` (tile shrink-to-fit), `src/savedPuzzle.js` (the per-day saved-board store, launch decision, and switcher labels), and `shared/puzzleDates.js` (the ET date math the Worker and the client both read). There is no router, no state library, no CSS framework. State persists to `localStorage` under `connections-puzzle`.
 
 ### Theming (light/dark — the inline-styles + CSS-vars split)
 
-The `styles` object in `App.jsx` is still inline, but **every color is a `var(--token)`**, never a literal — the only intentional hex literals are `ROW_COLORS` (the four Connections tile colors, which are the puzzle's identity and are *not* themed; their text stays dark because all four are light pastels). The tokens live in `src/index.css` under `:root`, with a `@media (prefers-color-scheme: dark)` block that re-points the same variables. So **dark mode is automatic and has no React state** — the OS scheme flips the CSS vars and the whole UI follows. Inline styles can't do `:hover`/`:focus-visible`/`@media`/keyframes, so those (card/tile hover lifts, the shared focus ring, the `tileIn` staggered board reveal, `lockPop`, `spin`, `prefers-reduced-motion`) live in `index.css` and attach via `className`. When adding UI: use a token (add light+dark values if it's a new one), not a hex; add a `className` for any hover/focus/animation. `index.html` carries the light/dark `theme-color` metas and paints the page background pre-hydration to avoid a flash.
+The `styles` object in `App.jsx` is still inline, but **every color is a `var(--token)`**, never a literal — the only intentional hex literals are `ROW_COLORS` (the four Connections tile colors, which are the puzzle's identity and are *not* themed; their text stays dark because all four are light pastels). The tokens live in `src/index.css` under `:root`, with a `@media (prefers-color-scheme: dark)` block that re-points the same variables. So **dark mode is automatic and has no React state** — the OS scheme flips the CSS vars and the whole UI follows. Inline styles can't do `:hover`/`:focus-visible`/`@media`/keyframes or modifier classes, so those (tile hover lifts, the shared focus ring, the `tileIn` staggered board reveal, `lockPop`, `spin`, `sheetIn`, `prefers-reduced-motion`) live in `index.css` and attach via `className` — and three pieces are styled *entirely* there because their layout depends on exactly those things: the day switcher (`.segs`/`.seg`, with a dense modifier for the fourth segment and a narrow-viewport media query), the overflow/how-this-works `<dialog>` (`.sheet`, a bottom sheet under 600px and a centered card above, plus `::backdrop`), and the compact header buttons (`.small-btn`/`.icon-btn`, which the same media query shrinks). When adding UI: use a token (add light+dark values if it's a new one), not a hex; add a `className` for any hover/focus/animation/media query. `index.html` carries the light/dark `theme-color` metas and paints the page background pre-hydration to avoid a flash.
 
 Type is **self-hosted Libre Franklin** (the open Franklin Gothic NYT itself uses) via `@fontsource-variable/libre-franklin`, imported in `main.jsx` and bundled by Vite — no Google Fonts request (keeps the privacy-forward, own-origin posture). Don't switch it to a CDN `<link>`; the `--font` token already lists the fallback stack.
 
-### OCR pipeline (the non-obvious part)
+### Landing, day switcher, and the per-day store
 
-When a user uploads a screenshot, `UploadScreen.runOcr` lazy-imports `tesseract.js` (so it isn't in the initial bundle) and runs a multi-stage extraction:
+The board is the home screen — there is no menu. The header carries a segmented switcher for today plus the two prior days (`RECENT_WINDOW_DAYS = 2` in `shared/puzzleDates.js`, enforced server-side too, so a hand-crafted `?date=` can't reach further back than the switcher offers); everything rarely needed (Reset, manual entry, "how this works", the official-game link) sits behind one overflow button. Tapping a day whose board is saved switches instantly with no network; a day with no saved board fetches in place, leaving the current board on screen until the words arrive.
 
-1. **Recognize with bboxes**: Tesseract is configured with a letter+punctuation whitelist (no digits) and `oem=1` (LSTM-only). It returns both flat text and a nested `blocks → paragraphs → lines → words` tree, each word carrying a bbox.
-2. **Filter chrome by case**: `isAllCapsLetters` drops UI text ("Create four groups of four!", "Mistakes Remaining: 3") because Connections tile text is rendered ALL CAPS while chrome is title/sentence case.
-3. **Reconstruct the 4×4 grid**: `kmeans1d` clusters word y-centers into 4 rows, then x-centers within each row into 4 columns. `reconstructTilesFromBboxes` returns 16 strings (some may be empty) when at least 8 cells are populated.
-4. **Fallback**: If bbox reconstruction fails confidence checks, `extractWordsFromOcr` dumps deduped uppercase lines from the raw text — alignment is lost but the user can clean it up on the manual entry screen.
+The store under `connections-puzzle` is v2 — one board per day rather than a slot pair:
 
-If you change OCR behavior, remember the contract: output is always 16 lines (or fewer for the user to fix manually), uppercase, normalized via `normalizeTileText` (allows `A-Za-z'-.& `).
+```js
+{ version: 2, boards: { [dateISO | 'custom']: board }, active, activeDate }
+```
 
-### Tesseract self-hosting (do not regress this)
-
-Tesseract.js by default fetches `worker.min.js`, the core WASM, and `eng.traineddata.gz` from jsDelivr/tessdata at runtime. In production this failed with opaque `NetworkError` inside the blob worker. The fix:
-
-- `scripts/copy-tesseract-assets.mjs` runs as `predev`/`prebuild` and mirrors all required assets into `public/tesseract/`. It only copies the LSTM variants (because we use `oem=1`) and downloads the language data once.
-- `App.jsx` passes `workerPath`, `corePath`, and `langPath` pointing at `/tesseract/...` so everything is served from our own origin.
-
-Don't remove the predev/prebuild scripts, don't switch to CDN paths, and don't add legacy (non-LSTM) core variants — they'd be dead weight.
+`activeDate` is the ET date the active board was *activated*, deliberately not when it was last touched, which collapses the launch rule to one sentence: **same ET day as the last activation → resume; otherwise open Today** (so a returning user always lands on Today, with the old board still reachable under its own day). Boards outside the window are pruned on parse, and the older two-slot and flat saves migrate once (dated boards to their dates, anything else to `custom`). Adopt-on-match promotes a custom board whose words are set-equal to a freshly fetched day's into that day's board, so words typed by hand during an outage keep their progress. All of this lives in `src/savedPuzzle.js` (pure, tested); `App.jsx` is just the wiring layer.
 
 ### Daily words (the Cloudflare Worker proxy)
 
-`src/App.jsx` auto-loads the current day's puzzle on launch by fetching `GET /api/puzzle` (optionally `?date=YYYY-MM-DD`). The endpoint exists because NYT's puzzle JSON sends no CORS header, so the browser can't read it directly:
+`src/App.jsx` auto-loads the current day's puzzle on launch by fetching `GET /api/puzzle` (optionally `?date=YYYY-MM-DD`, accepted only for today and the two prior days — the same window the switcher offers). The endpoint exists because NYT's puzzle JSON sends no CORS header, so the browser can't read it directly:
 
 - **Production**: `worker/index.js` is the Worker entry. `wrangler.jsonc` sets `run_worker_first: ["/api/*"]` so the handler — not the SPA asset fallback — sees the request. It fetches NYT server-side, strips the answer groupings down to the 16 words, and edge-caches the transformed result per date.
 - **Dev**: `vite.config.js`'s `devPuzzleApi` middleware serves the same `/api/puzzle` route during `npm run dev` using the *same* `worker/puzzle.js` functions, so the flow works locally without `wrangler dev`.
-- `worker/puzzle.js` owns the fetch/transform + date-window logic (`fetchPuzzleWords`, `resolvePuzzleDate`, `PuzzleError`) and is the part under Vitest.
+- `worker/puzzle.js` owns the fetch/transform + date-resolution logic (`fetchPuzzleWords`, `resolvePuzzleDate`, `PuzzleError`), reading the window and ET date math from `shared/puzzleDates.js`; both are under Vitest.
 
 Keep the answer groupings out of the response: the app is a word *loader*, not a solver.
 
 ## Deployment
 
-Hosted on Cloudflare Workers + Static Assets (see `wrangler.jsonc`). `not_found_handling: "single-page-application"` means unknown paths fall back to `index.html`. The deployed asset set is whatever ends up in `./dist`, which includes `public/tesseract/*` after the build.
+Hosted on Cloudflare Workers + Static Assets (see `wrangler.jsonc`). `not_found_handling: "single-page-application"` means unknown paths fall back to `index.html`. The deployed asset set is whatever ends up in `./dist`.
 
 ## Agent skills
 

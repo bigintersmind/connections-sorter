@@ -1,6 +1,7 @@
 /* ---------------------------------------------------------------------------
-   Theme tokens. Every color in App.jsx's inline `styles` references one of
-   these custom properties, so the light/dark split lives entirely here: the
+   Theme tokens. Every color in App.jsx's inline `styles` — and in the classes
+   further down this file — references one of these custom properties, so the
+   light/dark split lives entirely here: the
    media query below re-points the same variables and the whole UI follows,
    with no theme state in React. The four Connections row colors (yellow/green/
    blue/purple) are intentionally NOT themed — they're the puzzle's identity and
@@ -19,7 +20,6 @@
   --tile-text: #1b1813;
   --tile-border: #e7e3d6;
   --tile-shadow: 0 1px 2px rgba(40, 37, 26, 0.06), 0 3px 10px rgba(40, 37, 26, 0.05);
-  --tile-shadow-hover: 0 2px 5px rgba(40, 37, 26, 0.10), 0 9px 22px rgba(40, 37, 26, 0.08);
 
   --text: #1b1813;
   --text-soft: #565347;
@@ -36,7 +36,6 @@
 
   --primary: #221f18;
   --primary-text: #fbfaf4;
-  --primary-text-muted: #c5c2b5;
   --primary-hover: #36322a;
 
   --input-bg: #ffffff;
@@ -47,6 +46,9 @@
 
   --error-bg: #fbf1ef;
   --error-text: #c0473b;
+
+  /* Dimmer behind the overflow sheet and the "how this works" dialog. */
+  --backdrop: rgba(28, 25, 18, 0.34);
 
   color-scheme: light;
 }
@@ -62,7 +64,6 @@
     --tile-text: #f2f0e6;
     --tile-border: #393528;
     --tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 3px 12px rgba(0, 0, 0, 0.35);
-    --tile-shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 11px 26px rgba(0, 0, 0, 0.45);
 
     --text: #f2f0e6;
     --text-soft: #c4c1b4;
@@ -81,7 +82,6 @@
 
     --primary: #f2f0e6;
     --primary-text: #1b1813;
-    --primary-text-muted: #5b5849;
     --primary-hover: #ffffff;
 
     --input-bg: #1b1914;
@@ -92,6 +92,8 @@
 
     --error-bg: #2a1d1a;
     --error-text: #f0a89e;
+
+    --backdrop: rgba(0, 0, 0, 0.62);
 
     color-scheme: dark;
   }
@@ -134,33 +136,55 @@ body::before {
   z-index: 1;
 }
 
+/* Visually hidden but read aloud — the board is the whole app, so its name
+   lives here rather than in a header row that would cost real estate. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* --------------------------- Interaction states ---------------------------
    Inline styles can't express :hover / :focus-visible, so the hover lifts,
    focus rings, and keyframes live here and attach via className. Hover effects
    are gated behind (hover: hover) so touch devices don't get sticky states. */
-
-.menu-card {
-  transition: transform 0.16s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-@media (hover: hover) {
-  .menu-card:not(:disabled):hover {
-    transform: translateY(-2px);
-    box-shadow: var(--card-shadow-hover);
-  }
-}
-.menu-card:not(:disabled):active { transform: translateY(0) scale(0.995); }
 
 .btn {
   transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease,
     border-color 0.2s ease, opacity 0.2s ease, color 0.2s ease;
 }
 .btn:not(:disabled):active { transform: translateY(1px); }
+
+/* The compact bordered button: Shuffle and the overflow trigger in the board
+   header, Retry in the empty state. Sized here rather than inline because the
+   narrow-viewport media query further down has to be able to shrink it — an
+   inline value would win over it. */
+.small-btn {
+  padding: 7px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  font-family: var(--font);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.small-btn:disabled { color: var(--text-faint); }
+.icon-btn { padding: 7px 10px; font-size: 15px; font-weight: 700; line-height: 1; }
 @media (hover: hover) {
   .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
   .btn-secondary:not(:disabled):hover { border-color: var(--border-strong); }
   .small-btn:not(:disabled):hover { border-color: var(--border-strong); }
-  .chip:not(:disabled):hover { border-color: var(--border-strong); color: var(--text); }
   .ghost-btn:not(:disabled):hover { color: var(--text); }
+  .footer-link:hover { text-decoration: underline; }
 }
 
 .tile {
@@ -177,6 +201,9 @@ body::before {
 .tile:not(:disabled):active { transform: scale(0.97); }
 
 button:disabled { cursor: not-allowed; }
+/* The notice's Retry is disabled while a load is already running — the
+   ghost treatment has no border or fill to grey out, so fade it. */
+.ghost-btn:disabled { opacity: 0.5; }
 
 /* The board label inputs and manual-entry textarea read as real fields, not
    pre-filled content — keep placeholders clearly faint in both themes. */
@@ -190,15 +217,191 @@ textarea::placeholder {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
-textarea:focus-visible,
-.menu-card:focus-visible {
+textarea:focus-visible {
   outline: 3px solid var(--focus-ring);
   outline-offset: 2px;
 }
+/* The segments sit inside a pill with 2px of padding, so a 2px-offset ring
+   would spill over the group's border — tuck it in. */
+.seg:focus-visible { outline-offset: -1px; }
 
-/* Transient notice (the post-swap resume offer) slides in under the board
-   header. Kept as a shared class: the "Today's puzzle is ready" banner reuses
-   this exact treatment. */
+/* ------------------------------ Day switcher ------------------------------
+   The segmented Today / Yesterday / weekday (/ Custom) control in the board
+   header. Unlike the rest of the app this is styled in CSS rather than inline:
+   it needs a modifier class for the four-segment case (inline styles can't
+   express one, and an inline value would win over it anyway) and it is the one
+   piece of layout that must survive a 320px viewport. */
+
+.segs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  /* Safety valve, not the plan: the sizes below fit four segments plus both
+     header buttons down to 320px. If a longer weekday or a fallback font ever
+     blows that budget, the pill scrolls rather than colliding with Shuffle or
+     wrapping the header onto two rows. (App.jsx keeps the active segment in
+     view when that happens.) */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.segs::-webkit-scrollbar { display: none; }
+
+.seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 11px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.seg[aria-pressed="true"] {
+  background: var(--selected-bg);
+  color: var(--selected-text);
+}
+@media (hover: hover) {
+  .seg:not([aria-pressed="true"]):hover { color: var(--text); }
+}
+
+/* Four segments (a Custom board exists) have to fit the same row on the
+   narrowest phone: tighten rather than wrap. */
+.segs-dense .seg { padding: 5px 7px; font-size: 12px; }
+
+/* iPhone-SE-and-narrower. The header is the one row that can't reflow, so both
+   the segments and the two buttons give up a few pixels here; with four
+   segments the progress dots go too (the segment's aria-label still announces
+   the locked count, and the fill still says which day you're on). */
+@media (max-width: 380px) {
+  .seg { padding: 5px 8px; font-size: 12px; }
+  .segs-dense { gap: 1px; }
+  .segs-dense .seg { padding: 5px 5px; font-size: 11.5px; }
+  .segs-dense .seg-dot { display: none; }
+  .small-btn { padding: 6px 8px; font-size: 12px; }
+  .icon-btn { padding: 6px 8px; }
+}
+
+/* A day with a saved board (other than the one on screen) carries a dot; the
+   day being fetched carries a spinner in the same slot, so the segment doesn't
+   change width. */
+.seg-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.seg-spin {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+.seg[aria-pressed="true"] .seg-spin {
+  border-color: transparent;
+  border-top-color: var(--selected-text);
+}
+
+/* ------------------- Overflow sheet / "how this works" --------------------
+   Both are native <dialog>s (Escape, focus trapping, inertness and the
+   backdrop all come from the platform). Styled here because the phone/desktop
+   split is a media query and the backdrop is a pseudo-element — neither is
+   expressible inline. */
+
+.sheet {
+  /* Phones: a bottom sheet, full width, anchored to the bottom edge. */
+  margin: auto auto 0;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 18px 18px 0 0;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  box-shadow: var(--card-shadow-hover);
+}
+.sheet::backdrop { background: var(--backdrop); }
+.sheet[open] { animation: sheetIn 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes sheetIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (min-width: 600px) {
+  /* Roomier viewports: a small centered card instead. */
+  .sheet {
+    margin: auto;
+    width: auto;
+    max-width: 340px;
+    border-radius: 16px;
+  }
+}
+
+.sheet-body { display: flex; flex-direction: column; }
+.sheet-prose { padding: 20px 20px 18px; }
+
+.sheet-item {
+  display: block;
+  width: 100%;
+  padding: 14px 20px;
+  border: none;
+  background: none;
+  font-family: var(--font);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.sheet-item + .sheet-item { border-top: 1px solid var(--border); }
+.sheet-item-danger { color: var(--error-text); }
+.sheet-item:disabled { color: var(--text-faint); }
+.sheet-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+@media (hover: hover) {
+  .sheet-item:not(:disabled):hover { background: var(--bg-2); }
+  .sheet-close:hover { color: var(--text); }
+}
+
+/* Explicit dismissal for touch, where Escape isn't available and a backdrop
+   tap isn't obvious. */
+.sheet-close {
+  width: 100%;
+  padding: 14px 20px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+/* One-line load failure under the board header — slides in so it reads as an
+   arrival rather than a layout shift. */
 .notice {
   animation: noticeIn 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }

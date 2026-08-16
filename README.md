@@ -8,23 +8,27 @@ It does **not** check answers, save scores, or replay the official game. Bring y
 
 ## Use it
 
-Two ways to load a puzzle:
-
-- **Upload a screenshot** — drop in an image of the puzzle and Tesseract.js OCR (running entirely in your browser) extracts the 16 tile words. Edit the result if anything looks off, then load the board.
-- **Type or paste 16 words** — one per line, or comma-separated. Useful if you have the words from somewhere other than a screenshot.
+The app opens straight onto today's puzzle — the words load automatically, no setup. A switcher in the board header offers Today, Yesterday, and the day before; each day keeps its own progress, so switching between them is one tap and never costs you anything.
 
 On the board:
 
 - Tap two tiles to swap them
 - Tap a colored row label to lock it in once you're confident in that grouping
 - Optionally type a category guess into each row's label field
-- Reset clears your locks and labels; Shuffle randomizes any unlocked rows
+- Shuffle randomizes any unlocked rows
 
-State persists to `localStorage`, so you can close the tab and pick up where you left off.
+Behind the overflow button (⋯) in the header:
+
+- **Reset board** — clears your locks and labels for the day you're on
+- **Enter words manually** — type or paste the 16 words yourself, one per line or comma-separated (the fallback if the day's words can't be fetched)
+- **How this works** — a short explainer
+- **Play the official game** — a link back to NYT
+
+Each day's board persists to `localStorage` separately, so you can close the tab and pick up where you left off.
 
 ## Privacy
 
-OCR runs in the browser — your screenshots never leave your device. The first OCR run downloads ~10MB of language data from the Tesseract CDN; subsequent runs are cached.
+Nothing you do on the board leaves your device. The only network request is to this app's own `/api/puzzle` proxy, which fetches the day's puzzle from NYT server-side and returns just the 16 words — never the answer groupings. No signup, no accounts, no tracking scripts.
 
 ## Development
 
@@ -36,7 +40,7 @@ npm run build        # production build into ./dist
 npm run lint
 ```
 
-Stack: React 19 + Vite 8, inline styles, [tesseract.js](https://github.com/naptha/tesseract.js) for OCR (lazy-loaded so it only ships if used).
+Stack: React 19 + Vite 8, inline styles backed by CSS custom-property tokens (light/dark), and a Cloudflare Worker proxy for the daily words.
 
 ## License
 

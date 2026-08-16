@@ -33,6 +33,5 @@ jobs:
       - run: npm test
         env:
           TZ: America/New_York
-      # `build` runs prebuild, which mirrors Tesseract assets and downloads the
-      # language data over the network (idempotent). Catches build breakage too.
+      # Catches build breakage too, not just lint/test regressions.
       - run: npm run build

@@ -11,13 +11,13 @@
 // category titles and groupings so the puzzle's answer key never leaves the
 // server. The app stays a word loader, not a solver/answer site.
 
-// First public NYT Connections puzzle. Requests before this 404 upstream.
-export const PUZZLE_LAUNCH_DATE = "2023-06-12";
-// Loadable window: today plus this many prior days. Keeps the feature a
-// "recent puzzles" helper, not a browsable archive.
-export const RECENT_WINDOW_DAYS = 6;
+import { earliestAllowedDate, isIsoDate, todayET } from "../shared/puzzleDates.js";
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+// The launch date, the window size, and the ET/DST date math live in
+// shared/puzzleDates.js so the client's day switcher and this gate can't
+// drift. Re-exported here because worker/index.js, vite.config.js and this
+// module's tests have always sourced them from "the puzzle module".
+export { PUZZLE_LAUNCH_DATE, RECENT_WINDOW_DAYS, addDays, todayET } from "../shared/puzzleDates.js";
 
 const nytEndpoint = (date) =>
   `https://www.nytimes.com/svc/connections/v2/${date}.json`;
@@ -31,23 +31,6 @@ export class PuzzleError extends Error {
   }
 }
 
-// Today's puzzle date (YYYY-MM-DD) in America/New_York. NYT daily puzzles roll
-// over at midnight Eastern, and the endpoint's date path is the ET print_date.
-export function todayET(now = new Date()) {
-  // en-CA formats as YYYY-MM-DD.
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-  }).format(now);
-}
-
-// Calendar arithmetic on a YYYY-MM-DD string, DST-safe (operates in UTC).
-export function addDays(isoDate, delta) {
-  const [y, m, d] = isoDate.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + delta);
-  return dt.toISOString().slice(0, 10);
-}
-
 // Resolve + validate a requested date against the allowed window. Returns
 // { date } on success or { error } describing the rejection. The server is the
 // source of truth here so a hand-crafted URL can't turn the proxy into an
@@ -55,15 +38,10 @@ export function addDays(isoDate, delta) {
 export function resolvePuzzleDate(requested, now = new Date()) {
   const today = todayET(now);
   if (requested == null || requested === "") return { date: today };
-  if (!ISO_DATE.test(requested)) return { error: "bad_date" };
+  if (!isIsoDate(requested)) return { error: "bad_date" };
   if (requested > today) return { error: "future" };
-  const earliest = maxDate(addDays(today, -RECENT_WINDOW_DAYS), PUZZLE_LAUNCH_DATE);
-  if (requested < earliest) return { error: "out_of_range" };
+  if (requested < earliestAllowedDate(today)) return { error: "out_of_range" };
   return { date: requested };
-}
-
-function maxDate(a, b) {
-  return a > b ? a : b;
 }
 
 // Fetch the day's puzzle and reduce it to 16 words in board-position order.

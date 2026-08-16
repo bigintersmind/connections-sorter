@@ -19,6 +19,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addDays as sharedAddDays,
+  todayET as sharedTodayET,
+} from "../shared/puzzleDates.js";
+import {
   PUZZLE_LAUNCH_DATE,
   RECENT_WINDOW_DAYS,
   PuzzleError,
@@ -74,64 +78,29 @@ afterEach(() => {
 // ---- constants -----------------------------------------------------------
 
 describe("window constants", () => {
-  // Pinned because the boundary tests below assume these exact values, and
-  // because src/App.jsx duplicates them — a deliberate change should break a
-  // test, not silently let the chips and the server disagree.
+  // Pinned because the boundary tests below assume these exact values. The
+  // numbers themselves (and the ET/DST date math) are owned and tested by
+  // shared/puzzleDates.js — what matters here is that the server gate reads
+  // the SAME ones the client's day switcher does.
   it("are the documented launch date and window size", () => {
     expect(PUZZLE_LAUNCH_DATE).toBe("2023-06-12");
-    expect(RECENT_WINDOW_DAYS).toBe(6);
-  });
-});
-
-// ---- addDays -------------------------------------------------------------
-
-describe("addDays", () => {
-  it("crosses a month boundary", () => {
-    expect(addDays("2026-01-31", 1)).toBe("2026-02-01");
+    expect(RECENT_WINDOW_DAYS).toBe(2);
   });
 
-  it("crosses a year boundary", () => {
-    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
-  });
-
-  it("goes backwards across a month boundary", () => {
-    expect(addDays("2026-03-01", -1)).toBe("2026-02-28");
-  });
-
-  it("handles a leap day", () => {
-    expect(addDays("2024-02-28", 1)).toBe("2024-02-29");
-  });
-
-  it("is DST-safe — pure UTC arithmetic doesn't drift across spring-forward", () => {
-    // US DST begins 2026-03-08. A local-time implementation could land on the
-    // wrong day here; UTC arithmetic stays exact.
-    expect(addDays("2026-03-07", 1)).toBe("2026-03-08");
-    expect(addDays("2026-03-08", 1)).toBe("2026-03-09");
-    expect(addDays("2026-03-07", 7)).toBe("2026-03-14");
-  });
-});
-
-// ---- todayET -------------------------------------------------------------
-
-describe("todayET", () => {
-  it("rolls over at midnight Eastern, not UTC (EDT / summer)", () => {
-    // 03:00 UTC on 2026-05-28 is still 2026-05-27 23:00 in New York (EDT, -4).
-    expect(todayET(new Date("2026-05-28T03:00:00Z"))).toBe("2026-05-27");
-    // 05:00 UTC is 2026-05-28 01:00 in New York.
-    expect(todayET(new Date("2026-05-28T05:00:00Z"))).toBe("2026-05-28");
-  });
-
-  it("rolls over at midnight Eastern (EST / winter, -5)", () => {
-    expect(todayET(new Date("2026-01-15T04:00:00Z"))).toBe("2026-01-14");
-    expect(todayET(new Date("2026-01-15T06:00:00Z"))).toBe("2026-01-15");
+  it("re-exports the shared date helpers rather than re-implementing them", () => {
+    // worker/index.js, vite.config.js, and these tests import the helpers from
+    // here; identity proves there is still exactly one implementation, so the
+    // client and the server can never disagree about what "today" is.
+    expect(addDays).toBe(sharedAddDays);
+    expect(todayET).toBe(sharedTodayET);
   });
 });
 
 // ---- resolvePuzzleDate (the date-window gate) ----------------------------
 
 describe("resolvePuzzleDate", () => {
-  // A fixed "now" well after launch so the rolling 7-day window is the active
-  // floor. todayET(NOW) === "2026-05-28".
+  // A fixed "now" well after launch so the rolling 3-day window (today + 2
+  // prior days) is the active floor. todayET(NOW) === "2026-05-28".
   const NOW = new Date("2026-05-28T16:00:00Z");
 
   it("defaults an empty request to today", () => {
@@ -142,14 +111,17 @@ describe("resolvePuzzleDate", () => {
 
   it("accepts today and the in-window past", () => {
     expect(resolvePuzzleDate("2026-05-28", NOW)).toEqual({ date: "2026-05-28" });
-    expect(resolvePuzzleDate("2026-05-25", NOW)).toEqual({ date: "2026-05-25" });
+    expect(resolvePuzzleDate("2026-05-27", NOW)).toEqual({ date: "2026-05-27" });
   });
 
-  it("accepts exactly the oldest in-window day (today - 6)", () => {
-    expect(resolvePuzzleDate("2026-05-22", NOW)).toEqual({ date: "2026-05-22" });
+  it("accepts exactly the oldest in-window day (today - 2)", () => {
+    // The third and last segment the switcher offers.
+    expect(resolvePuzzleDate("2026-05-26", NOW)).toEqual({ date: "2026-05-26" });
   });
 
-  it("rejects the day just past the window (today - 7) as out_of_range", () => {
+  it("rejects the day just past the window (today - 3) as out_of_range", () => {
+    // The switcher can't reach this day, so neither can a hand-crafted URL.
+    expect(resolvePuzzleDate("2026-05-25", NOW)).toEqual({ error: "out_of_range" });
     expect(resolvePuzzleDate("2026-05-21", NOW)).toEqual({ error: "out_of_range" });
   });
 
@@ -173,12 +145,11 @@ describe("resolvePuzzleDate", () => {
   });
 
   it("clamps the floor to the launch date when the window reaches before it", () => {
-    // Near launch, the rolling window (today - 6) would reach before NYT's
-    // first puzzle, so PUZZLE_LAUNCH_DATE becomes the floor instead.
-    const nearLaunch = new Date("2023-06-14T16:00:00Z"); // todayET === 2023-06-14
+    // The day after launch, the rolling floor (today - 2) would be
+    // 2023-06-11 — a day with no puzzle — so PUZZLE_LAUNCH_DATE is the floor.
+    const nearLaunch = new Date("2023-06-13T16:00:00Z"); // todayET === 2023-06-13
     expect(resolvePuzzleDate("2023-06-12", nearLaunch)).toEqual({ date: "2023-06-12" });
     expect(resolvePuzzleDate("2023-06-11", nearLaunch)).toEqual({ error: "out_of_range" });
-    // 2023-06-08 is inside the rolling 6-day window but before launch.
     expect(resolvePuzzleDate("2023-06-08", nearLaunch)).toEqual({ error: "out_of_range" });
   });
 });
@@ -198,7 +169,7 @@ describe("fetchPuzzleWords — transform", () => {
   });
 
   it("uppercases and trims, preserving accented characters", async () => {
-    // The client passes these through verbatim (no OCR normalizer), so this
+    // The client passes these through verbatim (no client-side normalizer), so this
     // transform is the only thing cleaning them — accents must survive.
     const cards = [
       { content: "  el niño  ", position: 0 },

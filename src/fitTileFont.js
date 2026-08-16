@@ -4,7 +4,7 @@
 // so we measure the rendered button and step the font down until the content
 // stops overflowing its square (or hits the floor).
 //
-// Kept out of App.jsx (like clipboardImage.js / worker/puzzle.js) because it's
+// Kept out of App.jsx (like savedPuzzle.js / worker/puzzle.js) because it's
 // pure DOM-in/DOM-out: the React side owns *when* to call it (pre-paint, on
 // resize, and once the web font loads); isolating the algorithm here lets it be
 // unit-tested without a layout engine.
