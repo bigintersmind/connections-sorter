@@ -7,7 +7,13 @@ import { createRoot } from 'react-dom/client'
 import '@fontsource-variable/libre-franklin'
 import './index.css'
 import App from './App.jsx'
+import { withoutShareMarker } from './share.js'
 
+// A visit through a shared link arrives as /?utm_source=share. Drop the marker
+// before the first paint so it doesn't linger in the address bar or ride along
+// when this person shares in turn. replaceState: no reload, no history entry.
+const cleanHref = withoutShareMarker(location.href)
+if (cleanHref) history.replaceState(history.state, '', cleanHref)
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

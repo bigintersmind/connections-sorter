@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fitTileFont } from "./fitTileFont.js";
+import { SITE_URL, sharePayload } from "./share.js";
 import { windowDates } from "../shared/puzzleDates.js";
 import {
   CUSTOM_KEY,
@@ -33,6 +34,11 @@ const OFFICIAL_GAME_URL = "https://www.nytimes.com/games/connections";
 const SUPERSEDED = "superseded";
 
 const FETCH_TIMEOUT_MS = 9000;
+
+// Phones, and Safari and Chrome on macOS, have a native share sheet; Firefox
+// and Chrome on Linux don't, and get the clipboard instead. Decided once —
+// it's a platform property, not something that changes mid-session.
+const CAN_NATIVE_SHARE = typeof navigator !== "undefined" && typeof navigator.share === "function";
 
 // Stable empty fallbacks for a board-less render. Module constants rather than
 // fresh literals so effect dependency arrays don't see a "new" value every
@@ -147,6 +153,10 @@ export default function ConnectionsOrganizer() {
   const [manualText, setManualText] = useState("");
   const [manualError, setManualError] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
+  // Outcome of the last "Share this site" tap that ended on the clipboard
+  // path: "copied" | "failed" | null. Shown as the item's hint; cleared
+  // whenever the sheet closes so the next open starts fresh.
+  const [shareStatus, setShareStatus] = useState(null);
   const autoLoadedRef = useRef(false);
   const fetchAbortRef = useRef(null);
   const tileRefs = useRef([]);
@@ -453,8 +463,35 @@ export default function ConnectionsOrganizer() {
   // flush — would lose that event, so the state is reset here too.
   const closeOverflow = useCallback(() => {
     setOverflowOpen(false);
+    setShareStatus(null);
     overflowRef.current?.close();
   }, []);
+
+  // Native share sheet where there is one, clipboard elsewhere. Dismissing the
+  // sheet rejects with AbortError and means "never mind", so the menu stays
+  // put; any other rejection falls through to the clipboard so the tap still
+  // yields a link. Nothing leaves the device except through the target the
+  // player picks in the sheet — the privacy note in "how this works" holds.
+  const shareSite = useCallback(async () => {
+    const payload = sharePayload();
+    if (CAN_NATIVE_SHARE) {
+      try {
+        await navigator.share(payload);
+        closeOverflow();
+        return;
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(payload.url);
+      setShareStatus("copied");
+    } catch {
+      // Insecure context, denied permission, or no clipboard API at all:
+      // show the address so the player can still pass it on by hand.
+      setShareStatus("failed");
+    }
+  }, [closeOverflow]);
 
   // A click that lands on the dialog element itself (rather than its padded
   // inner box) came from the backdrop — the platform gives ::backdrop no node
@@ -783,7 +820,7 @@ export default function ConnectionsOrganizer() {
         className="sheet"
         aria-label="More options"
         onClick={onDialogClick}
-        onClose={() => setOverflowOpen(false)}
+        onClose={() => { setOverflowOpen(false); setShareStatus(null); }}
       >
         <div className="sheet-body">
           <button
@@ -806,6 +843,19 @@ export default function ConnectionsOrganizer() {
             onClick={() => { closeOverflow(); howRef.current?.showModal(); }}
           >
             How this works
+          </button>
+          <button className="sheet-item" onClick={shareSite}>
+            Share this site
+            {/* aria-live so "Link copied" is announced without moving focus. */}
+            <span className="sheet-hint" aria-live="polite">
+              {shareStatus === "copied"
+                ? "Link copied"
+                : shareStatus === "failed"
+                  ? `Couldn't copy — the address is ${new URL(SITE_URL).host}`
+                  : CAN_NATIVE_SHARE
+                    ? "Send a link to a friend"
+                    : "Copy a link to send to a friend"}
+            </span>
           </button>
           <a
             className="sheet-item"
