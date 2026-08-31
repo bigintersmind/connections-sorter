@@ -47,6 +47,7 @@ Before closing out, grep the codebase for comments that name your ticket ID or d
 Before committing, run the project's verification commands. The full list lives in `CLAUDE.md`; for this project that means at minimum:
 
 - `npm run lint`
+- `npm test`
 - `npm run build`
 
 Do not commit until they pass. If a feedback loop is failing for reasons unrelated to your change (pre-existing breakage), comment on the ticket with what you found and pick a different ticket — don't paper over unrelated breakage.

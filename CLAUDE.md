@@ -50,11 +50,13 @@ Keep the answer groupings out of the response: the app is a word *loader*, not a
 
 Hosted on Cloudflare Workers + Static Assets (see `wrangler.jsonc`). `not_found_handling: "single-page-application"` means unknown paths fall back to `index.html`. The deployed asset set is whatever ends up in `./dist`.
 
+Deploys happen through Cloudflare's GitHub integration on push to `main` — there is no local wrangler credential on this machine, so `npx wrangler deploy` fails without `CLOUDFLARE_API_TOKEN`. To ship: commit and `git push`; Cloudflare builds and deploys automatically.
+
 ## Agent skills
 
 ### Issue tracker
 
-bd (beads), accessed via the `bd` CLI. See `docs/agents/issue-tracker.md`.
+GitHub Issues on this repo, accessed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -93,25 +95,24 @@ cp -rf source dest          # NOT: cp -r source dest
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
+## Issue tracking
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+Work is tracked as **GitHub Issues** on `bigintersmind/connections-sorter`, driven through the `gh` CLI. `docs/agents/issue-tracker.md` has the conventions the skills follow and `docs/agents/triage-labels.md` the label vocabulary (`needs-triage` → `ready-for-agent` / `ready-for-human` → closed).
 
 ### Quick Reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+gh issue list --label ready-for-agent   # Find available agent work
+gh issue view <n> --comments            # View an issue and its agent brief
+gh issue comment <n> --body "..."       # Post a note
+gh issue close <n> --comment "..."      # Complete work
 ```
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use GitHub Issues for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Durable project knowledge belongs in this file, not in a per-machine memory store — it's checked in, so every session and AFK worktree sees it
+- Tickets before 2026-08-30 lived in bd (beads); commit messages prefixed `connections-xxx:` refer to those IDs. The archive is in git history: `git show bdac894:.beads/issues.jsonl`
 
 ## Session Completion
 
@@ -125,7 +126,6 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -138,4 +138,3 @@ bd close <id>         # Complete work
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->

@@ -26,10 +26,5 @@ dist-ssr
 # Playwright MCP test artifacts (snapshots, console logs, screenshots)
 .playwright-mcp/
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-
 # Cloudflare Wrangler local dev cache/state
 .wrangler/
