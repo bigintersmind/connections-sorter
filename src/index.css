@@ -232,6 +232,39 @@ body::before {
    pointer — `default`, not `not-allowed`: the row is settled, not forbidden. */
 .tile[aria-disabled="true"] { cursor: default; }
 
+/* Drag-to-swap. Touch: a drag has to win over the browser's own pan gesture,
+   and once a pan has started there is no taking it back, so panning is
+   declined up front on the tiles that can be dragged. Nothing is stranded —
+   the 4x4 board is sized to fit the viewport, the page around it is still
+   free to scroll, and a locked row's tiles can't be dragged so they keep
+   panning normally. `user-select` because a mouse drag across a board would
+   otherwise sweep a selection through the words. */
+.tile:not([aria-disabled="true"]) {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* The carried tile follows the pointer frame by frame, so it can't keep the
+   resting transition — 0.15s of easing would trail behind the finger. Both the
+   `:hover` lift and the `:active` scale are outranked by the inline transform
+   doing the following, so neither needs opting out here. */
+.tile-dragging {
+  transition: none;
+  position: relative;
+  z-index: 2;
+  cursor: grabbing;
+}
+/* …and it has to ride above the tiles it travels over, which takes lifting the
+   CELL, not just the tile. `.reveal`'s entrance animates opacity and transform
+   with a `both` fill, so every cell keeps a stacking context of its own for
+   good — a z-index on the tile inside one only sorts it against its own cell,
+   and the later cells in DOM order would paint straight over the tile crossing
+   them. */
+.reveal:has(.tile-dragging) {
+  position: relative;
+  z-index: 2;
+}
+
 button:disabled { cursor: not-allowed; }
 /* The borderless buttons — the notice's Retry and dismiss, the empty state's
    "enter the words yourself". The box carries the WCAG 2.5.8 target size while
@@ -537,11 +570,15 @@ textarea:focus-visible {
    `sheetIn`) use a `both` fill, so the frame they hold is already the natural
    style; `lockPop` is not an entrance and not filled, but its 0% and 100% are
    both `scale(1)`, so removing it leaves the tile exactly where it ends up
-   anyway. The four selectors below are every transition in the app — every
-   `transition` declaration lives in this file, so none escapes inline (the
-   lock button carries `className="btn"` and takes `.btn`'s). Nothing waits on
-   `transitionend` either: the swap commit and the lock flash are on
-   setTimeouts in App.jsx.
+   anyway. The four selectors below are every transition in the app that has
+   anything to drop — every `transition` declaration lives in this file, so
+   none escapes inline (the lock button carries `className="btn"` and takes
+   `.btn`'s), and the only one not listed is `.tile-dragging`, which already
+   sets `transition: none` for everyone so a carried tile can keep up with the
+   pointer. Nothing waits on `transitionend` either: the swap commit and the
+   lock flash are on setTimeouts in App.jsx. A drag itself isn't animation —
+   it's the pointer's own motion, under the user's hand frame by frame — so it
+   has nothing to opt out of.
 
    The two spinners — `.seg-spin` here and the empty state's inline
    `styles.spinner` in App.jsx — deliberately keep running. A 9px / 34px

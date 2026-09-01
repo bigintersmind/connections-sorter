@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fitTileFonts } from "./fitTileFont.js";
+import {
+  dropTargetIndex,
+  isTileInPlay,
+  passedDragThreshold,
+  toPageRect,
+} from "./dragSwap.js";
 import { SITE_URL, sharePayload } from "./share.js";
 import {
   THEME_COLORS,
@@ -207,6 +213,14 @@ export default function ConnectionsOrganizer() {
   const [selected, setSelected] = useState(null);
   const [flashRow, setFlashRow] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
+  // The drag in progress, or null. Only set once the press has cleared
+  // DRAG_THRESHOLD_PX — a press that hasn't is still a tap and renders like
+  // one. { from, dx, dy, over }: the tile being carried, how far it has
+  // travelled from the press, and the tile it would land on (null when the
+  // release point wouldn't swap anything). The bookkeeping that doesn't need a
+  // render — pointer id, press origin, the measured tile boxes — lives in
+  // dragRef instead.
+  const [drag, setDrag] = useState(null);
   const [manualText, setManualText] = useState("");
   const [manualError, setManualError] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -217,6 +231,14 @@ export default function ConnectionsOrganizer() {
   const [shareStatus, setShareStatus] = useState(null);
   const autoLoadedRef = useRef(false);
   const fetchAbortRef = useRef(null);
+  // The live press, from pointerdown to pointerup: { pointerId, key, from,
+  // startX, startY, rects }. `key` is the board the press started on, so the
+  // swap it ends in takes the same same-day guard a tap swap does. `rects` is
+  // null until the press clears the drag threshold and doubles as the "this
+  // is a drag now" flag.
+  const dragRef = useRef(null);
+  // Set for one task after a drag ends, to swallow the click that follows it.
+  const suppressClickRef = useRef(false);
   const tileRefs = useRef([]);
   const gridRef = useRef(null);
   const segsRef = useRef(null);
@@ -325,6 +347,22 @@ export default function ConnectionsOrganizer() {
     if (a.left < s.left) segs.scrollLeft += a.left - s.left;
     else if (a.right > s.right) segs.scrollLeft += a.right - s.right;
   }, [activeKey]);
+
+  // A press doesn't outlive the grid it was measured against. The grid is
+  // keyed on activeKey and isn't rendered at all on the manual-entry screen,
+  // so a fetch landing mid-drag (or a switch away) remounts every tile under
+  // the finger. Nothing tells the handlers: the pointerup goes to the removed
+  // element (a finger's up is bound to its touchstart target, and for a mouse
+  // the capture is simply gone), and NO pointercancel fires for a removed
+  // capture. commitSwap's same-day guard isn't enough on its own — it protects
+  // the store write, not the press in dragRef or the `drag` state that renders
+  // a tile as carried, and left alone those would paint the NEW tile at that
+  // index translated, ringed and showing the other day's word until the next
+  // press. A layout effect so the stale transform never reaches the screen.
+  useLayoutEffect(() => () => {
+    dragRef.current = null;
+    setDrag(null);
+  }, [activeKey, screen]);
 
   // Cancel an in-flight load so a slow request can't complete later and yank
   // the player onto a day they've since navigated away from.
@@ -452,7 +490,24 @@ export default function ConnectionsOrganizer() {
     loadDay(todayET());
   }, [launch, loadDay]);
 
+  // The one place two tiles trade positions, shared by tap-to-swap and
+  // drag-to-swap so both take the same same-day guard: a swap belongs to the
+  // board it was started on, and by the time it commits the player may have
+  // switched days (the tap path waits out a 200ms animation first).
+  const commitSwap = useCallback((a, b, key) => {
+    setStore((s) => {
+      if (s.active !== key) return s;
+      const next = [...s.boards[key].tiles];
+      [next[a], next[b]] = [next[b], next[a]];
+      return updateActive(s, { tiles: next });
+    });
+  }, []);
+
   const handleTap = useCallback((index) => {
+    // A drag just ended: pointer capture retargets its trailing click to the
+    // tile the drag started on, and a drag is not a tap — it has already
+    // committed (or deliberately cancelled) its own swap.
+    if (suppressClickRef.current) return;
     // A swap is in flight for 200ms; a tap during it would queue a second swap
     // against positions that are about to change. Ignore it.
     if (swapAnim) return;
@@ -467,20 +522,135 @@ export default function ConnectionsOrganizer() {
       if (lockedRows[selectedRow]) { setSelected(index); return; }
       setSwapAnim({ a: selected, b: index });
       setTimeout(() => {
-        setStore((s) => {
-          // The swap commits after the animation, by which time the player may
-          // have switched days — apply it to the board it was started on, or
-          // not at all.
-          if (s.active !== activeKey) return s;
-          const next = [...s.boards[activeKey].tiles];
-          [next[selected], next[index]] = [next[index], next[selected]];
-          return updateActive(s, { tiles: next });
-        });
+        commitSwap(selected, index, activeKey);
         setSwapAnim(null);
         setSelected(null);
       }, 200);
     }
-  }, [selected, lockedRows, activeKey, swapAnim]);
+  }, [selected, lockedRows, activeKey, swapAnim, commitSwap]);
+
+  // Drag-to-swap. Pointer Events rather than HTML5 drag-and-drop, which never
+  // fires for a finger; `setPointerCapture` from the press rather than from
+  // the threshold, because in between the pointer can already have left the
+  // tile and an uncaptured move over a sibling would never come back here.
+  // Capture leaves the tap path alone: a press that never moves still ends in
+  // a click on the tile it started on.
+  const handleTilePointerDown = useCallback((index, e) => {
+    // Primary button only — a right- or middle-click press isn't a drag.
+    // (Touch and pen both report button 0.)
+    if (e.button !== 0) return;
+    // A tap swap is animating for 200ms; a drag started against positions
+    // that are about to change would land on the wrong tiles. Same bail as
+    // handleTap's.
+    if (swapAnim) return;
+    // First pointer wins. A second finger (or a resting palm) landing on a
+    // tile while one is already down is ignored rather than replacing the
+    // press, which would strand the first finger's tile mid-air. That is all
+    // this guarantees: the refused contact's pointerdown returns before
+    // setting anything, so nothing here suppresses a click for it — Chrome
+    // and Safari don't synthesize a tap for a contact that lands while
+    // another is down, and that is the browser's doing, not ours. A press
+    // from the SAME pointer id is taken over instead: one pointer can't go
+    // down twice without coming up, so its earlier press can only be an
+    // orphan whose release never reached the tile (see cancelPress).
+    if (dragRef.current && dragRef.current.pointerId !== e.pointerId) return;
+    if (!isTileInPlay(index, lockedRows)) return;
+    dragRef.current = {
+      pointerId: e.pointerId,
+      key: activeKey,
+      from: index,
+      startX: e.clientX + window.scrollX,
+      startY: e.clientY + window.scrollY,
+      rects: null,
+    };
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }, [swapAnim, lockedRows, activeKey]);
+
+  const handleTilePointerMove = useCallback((e) => {
+    const press = dragRef.current;
+    if (!press || press.pointerId !== e.pointerId) return;
+    const x = e.clientX + window.scrollX;
+    const y = e.clientY + window.scrollY;
+    if (!press.rects) {
+      if (!passedDragThreshold(x - press.startX, y - press.startY)) return;
+      // Measure every tile once, on the frame the drag starts. Nothing moves
+      // for the rest of it — the carried tile rides on a transform, which
+      // doesn't touch layout, and the ResizeObserver that drives the font fit
+      // stays quiet for the same reason — so re-reading per move would only
+      // buy a forced layout a frame. Page coordinates (see toPageRect) so a
+      // scroll partway through can't desync them.
+      press.rects = tileRefs.current.map((el) =>
+        el ? toPageRect(el.getBoundingClientRect(), window.scrollX, window.scrollY) : null,
+      );
+    }
+    setDrag({
+      from: press.from,
+      dx: x - press.startX,
+      dy: y - press.startY,
+      over: dropTargetIndex(press.rects, x, y, press.from, lockedRows),
+    });
+  }, [lockedRows]);
+
+  const handleTilePointerUp = useCallback((e) => {
+    const press = dragRef.current;
+    if (!press || press.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    setDrag(null);
+    // Never crossed the threshold, so this was a tap all along: leave it to
+    // the click that's about to follow.
+    if (!press.rects) return;
+
+    // Swallow that click instead — on a timeout rather than by consuming the
+    // next one, which would otherwise eat a later Enter on a tile (a keyboard
+    // click fires no pointer events, so there's nothing to tell them apart by
+    // at the moment it arrives).
+    suppressClickRef.current = true;
+    setTimeout(() => { suppressClickRef.current = false; }, 0);
+
+    const over = dropTargetIndex(
+      press.rects,
+      e.clientX + window.scrollX,
+      e.clientY + window.scrollY,
+      press.from,
+      lockedRows,
+    );
+    // Released on nothing that can take it — off the board, back on the tile
+    // it came from, on a locked row, or with its own row locked under it
+    // while it was in the air. The tile returns to its place; no swap, and a
+    // tile picked up earlier by tap stays picked up.
+    if (over === null) return;
+    commitSwap(press.from, over, press.key);
+    // The drag wins over a pending tap. A tile selected by tap and then left
+    // alone while a different pair was dragged is a stale pick-up: the board
+    // under it has changed, so clear it rather than let the next tap swap
+    // against a position the player didn't choose.
+    setSelected(null);
+  }, [lockedRows, commitSwap]);
+
+  // The press ended without a release the tile gets to see. Serves two
+  // signals: pointercancel — the system took the pointer away, a pan or an
+  // edge swipe the browser claimed for itself — and window blur, below. No
+  // click follows either, so there's nothing to swallow. Neither fires when
+  // the tile is removed from under a captured pointer; the layout effect on
+  // activeKey/screen above covers that.
+  const cancelPress = useCallback(() => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setDrag(null);
+  }, []);
+
+  // Window blur is a REQUIRED cancel signal, not a redundant one. A mouse drag
+  // interrupted by Alt-Tab or a system dialog is released in another app, and
+  // no pointerup or pointercancel ever reaches the tile — drag libraries cancel
+  // on blur for exactly this reason. Left alone, that press would stay live:
+  // first-pointer-wins would refuse every later drag, the tile would float
+  // where it was left, and with a mouse — whose pointer id never changes — the
+  // next plain click's pointerup would match the stale press and replay it as
+  // a swap against rects measured before the interruption.
+  useEffect(() => {
+    window.addEventListener("blur", cancelPress);
+    return () => window.removeEventListener("blur", cancelPress);
+  }, [cancelPress]);
 
   const toggleLock = useCallback((rowIdx) => {
     if (!lockedRows[rowIdx]) {
@@ -789,6 +959,8 @@ export default function ConnectionsOrganizer() {
                       const idx = rowIdx * 4 + colIdx;
                       const isSelected = selected === idx;
                       const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
+                      const isDragging = drag?.from === idx;
+                      const isDropTarget = drag?.over === idx;
                       const word = tiles[idx] || "";
                       // Cascade the entrance top-left → bottom-right, capped so the
                       // last tile doesn't lag noticeably behind the first.
@@ -796,8 +968,13 @@ export default function ConnectionsOrganizer() {
 
                       // Precedence mirrors the original: locked fill wins over the
                       // selected (picked-up) state; flashing only deepens a locked
-                      // tile's glow. Colors flow through CSS vars so the board
-                      // tracks the light/dark theme automatically.
+                      // tile's glow. A carried tile reads as picked up, because it
+                      // is — the fill a tap gives, on a ring of its own (below).
+                      // A drop target keeps its resting fill and takes only a
+                      // ring, so it reads as "here", not as a second thing
+                      // selected. Colors flow through CSS
+                      // vars so the board tracks the light/dark theme
+                      // automatically.
                       let bg, fg, borderColor, boxShadow;
                       if (locked) {
                         bg = color.bg;
@@ -806,25 +983,55 @@ export default function ConnectionsOrganizer() {
                         boxShadow = flashing
                           ? `0 0 0 1px ${color.bg}, 0 8px 26px ${color.glow}, 0 0 32px ${color.glow}`
                           : `0 2px 8px ${color.glow}`;
+                      } else if (isDragging) {
+                        bg = "var(--selected-bg)";
+                        fg = "var(--selected-text)";
+                        borderColor = "transparent";
+                        // Same picked-up fill as a tap selection, but ringed in
+                        // the CONTRASTING token rather than in its own color:
+                        // the tile it's hovering is ringed in --selected-ring,
+                        // and two touching rings of one color read as a single
+                        // dark blob. This one cuts the carried tile out of
+                        // whatever it's over.
+                        boxShadow = "0 0 0 2.5px var(--selected-text), var(--selected-shadow)";
                       } else if (isSelected) {
                         bg = "var(--selected-bg)";
                         fg = "var(--selected-text)";
                         borderColor = "transparent";
                         boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
+                      } else if (isDropTarget) {
+                        bg = "var(--tile-bg)";
+                        fg = "var(--tile-text)";
+                        borderColor = "transparent";
+                        boxShadow = "0 0 0 3px var(--selected-ring), var(--tile-shadow)";
                       } else {
                         bg = "var(--tile-bg)";
                         fg = "var(--tile-text)";
                         borderColor = "var(--tile-border)";
                         boxShadow = "var(--tile-shadow)";
                       }
-                      // Selected tiles lift (you "pick them up"); the partner tile
-                      // tucks during the swap. Resting and locked tiles get no
-                      // inline transform so the CSS `.tile:hover` lift can apply
-                      // (an inline transform would always win over it).
-                      const liftTransform = isSelected
+                      // Selected tiles lift (you "pick them up"); a dragged tile
+                      // follows the pointer; the partner tile tucks during the
+                      // swap. Resting and locked tiles get no inline transform
+                      // so the CSS `.tile:hover` lift can apply (an inline
+                      // transform would always win over it).
+                      //
+                      // The two drag scales are a pair, and swapping them round
+                      // would cost the drop-target ring: carry the tile at the
+                      // finger's centre and it lands exactly over the target, so
+                      // the ring only reads if the target's ringed box stays
+                      // wider than the tile riding on top of it. 1.06 + a 3px
+                      // ring reaches 5.4px past a resting edge — a clear halo
+                      // around the 1.04 tile, and still inside the 6px grid gap,
+                      // so it never crowds the neighbours.
+                      const liftTransform = isDragging
+                        ? `translate(${drag.dx}px, ${drag.dy}px) scale(1.04)`
+                        : isSelected
                         ? "scale(1.05)"
                         : isSwapping
                         ? "scale(0.9)"
+                        : isDropTarget
+                        ? "scale(1.06)"
                         : undefined;
 
                       return (
@@ -834,14 +1041,27 @@ export default function ConnectionsOrganizer() {
                           style={{ ...styles.tileCell, animationDelay: `${revealDelay}ms` }}
                         >
                           <button
-                            className={flashing ? "tile tile-pop" : "tile"}
+                            className={[
+                              "tile",
+                              flashing && "tile-pop",
+                              isDragging && "tile-dragging",
+                            ].filter(Boolean).join(" ")}
                             ref={el => (tileRefs.current[idx] = el)}
+                            // Still just the tap state: a drag is a gesture in
+                            // flight, not a toggle, and it clears itself on
+                            // release, so it must not claim to be pressed.
                             aria-pressed={isSelected}
                             // A locked row's tiles ignore taps (handleTap returns
-                            // early). aria-disabled rather than disabled: the
-                            // words still have to be readable from the keyboard.
+                            // early) and can neither be dragged nor take a drop
+                            // (isTileInPlay). aria-disabled rather than disabled:
+                            // the words still have to be readable from the
+                            // keyboard.
                             aria-disabled={locked}
                             onClick={() => handleTap(idx)}
+                            onPointerDown={(e) => handleTilePointerDown(idx, e)}
+                            onPointerMove={handleTilePointerMove}
+                            onPointerUp={handleTilePointerUp}
+                            onPointerCancel={cancelPress}
                             style={{
                               ...styles.tile,
                               background: bg,
@@ -1048,7 +1268,7 @@ export default function ConnectionsOrganizer() {
           <h2 id="how-heading" style={styles.howHeading}>How this works</h2>
           <ol style={styles.howList}>
             <li>Today's words load automatically. Switch to yesterday's or the day before from the header.</li>
-            <li>Tap two tiles to swap them. Group words you think share a category into the same row.</li>
+            <li>Tap two tiles to swap them, or drag one onto another. Group words you think share a category into the same row.</li>
             <li>Lock rows you're confident in, then enter your guesses on the official NYT game.</li>
           </ol>
           <p style={styles.howNote}>
