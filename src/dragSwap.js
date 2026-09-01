@@ -37,6 +37,12 @@ export function passedDragThreshold(dx, dy, threshold = DRAG_THRESHOLD_PX) {
   return dx * dx + dy * dy >= threshold * threshold;
 }
 
+// A refused second contact can still emit pointercancel on its tile. Only the
+// pointer that owns the live press is allowed to cancel it.
+export function shouldCancelPointerPress(activePointerId, cancelledPointerId) {
+  return activePointerId === cancelledPointerId;
+}
+
 // Is this tile in play — can it be picked up, and can something be dropped on
 // it? The same test handleTap applies before a tap swap: a locked row is out.
 export function isTileInPlay(index, lockedRows) {

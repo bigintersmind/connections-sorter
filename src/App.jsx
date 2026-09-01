@@ -4,6 +4,7 @@ import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  shouldCancelPointerPress,
   toPageRect,
 } from "./dragSwap.js";
 import { SITE_URL, sharePayload } from "./share.js";
@@ -639,6 +640,15 @@ export default function ConnectionsOrganizer() {
     setDrag(null);
   }, []);
 
+  // A refused second contact can still cancel on the tile it landed on (for
+  // example, a locked tile the browser claims for scrolling). It must not end
+  // the first pointer's live press.
+  const handleTilePointerCancel = useCallback((e) => {
+    const press = dragRef.current;
+    if (!press || !shouldCancelPointerPress(press.pointerId, e.pointerId)) return;
+    cancelPress();
+  }, [cancelPress]);
+
   // Window blur is a REQUIRED cancel signal, not a redundant one. A mouse drag
   // interrupted by Alt-Tab or a system dialog is released in another app, and
   // no pointerup or pointercancel ever reaches the tile — drag libraries cancel
@@ -1061,7 +1071,7 @@ export default function ConnectionsOrganizer() {
                             onPointerDown={(e) => handleTilePointerDown(idx, e)}
                             onPointerMove={handleTilePointerMove}
                             onPointerUp={handleTilePointerUp}
-                            onPointerCancel={cancelPress}
+                            onPointerCancel={handleTilePointerCancel}
                             style={{
                               ...styles.tile,
                               background: bg,

@@ -11,6 +11,7 @@ import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  shouldCancelPointerPress,
   tileIndexAt,
   toPageRect,
 } from "./dragSwap.js";
@@ -50,6 +51,13 @@ describe("passedDragThreshold", () => {
   it("takes an explicit threshold", () => {
     expect(passedDragThreshold(9, 0, 12)).toBe(false);
     expect(passedDragThreshold(12, 0, 12)).toBe(true);
+  });
+});
+
+describe("shouldCancelPointerPress", () => {
+  it("accepts only the live pointer's own cancel", () => {
+    expect(shouldCancelPointerPress(17, 17)).toBe(true);
+    expect(shouldCancelPointerPress(17, 23)).toBe(false);
   });
 });
 
