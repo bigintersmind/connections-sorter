@@ -12,7 +12,7 @@ The app opens straight onto today's puzzle — the words load automatically, no 
 
 On the board:
 
-- Tap two tiles to swap them
+- Tap two tiles to swap them, or drag one tile onto another
 - Tap a colored row label to lock it in once you're confident in that grouping
 - Optionally type a category guess into each row's label field
 - Shuffle randomizes any unlocked rows
