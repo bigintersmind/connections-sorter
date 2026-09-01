@@ -47,7 +47,6 @@ The drag is **Pointer Events, never HTML5 drag-and-drop** (which never fires for
 - **Lifting the carried tile takes a z-index on the CELL** (`.reveal:has(.tile-dragging)`), not just on the tile. `.reveal`'s entrance animates opacity and transform with a `both` fill, so every cell keeps a stacking context of its own for good, and a z-index inside one only sorts against that cell.
 - **The carried tile's 1.04 and the drop target's 1.06 + 3px ring are a matched pair.** Grab a tile by its centre and it lands exactly over the target, so the ring reads only while the target's ringed box stays wider than the tile on top of it (5.4px past a resting edge — a clear halo, still inside the 6px grid gap). The carried tile is ringed in `--selected-text`, the *contrasting* token, for the same reason: ringed in `--selected-ring` like the target, the two merge into one dark blob.
 
-
 ### Accessibility contracts
 
 The board is operated by keyboard and screen reader as much as by touch, and the fixes from the 2026-08-31 audit (#10, #11) are easy to undo by accident:
