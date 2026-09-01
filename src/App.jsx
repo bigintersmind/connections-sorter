@@ -517,9 +517,9 @@ export default function ConnectionsOrganizer() {
   const openOverflow = useCallback(() => {
     setOverflowOpen(true);
     overflowRef.current?.showModal();
-    // showModal() focuses the first focusable item, which is Reset — making a
-    // destructive action the keyboard default (Enter, Enter). Land on the
-    // first harmless item instead; the PRD pins Reset at the top of the list.
+    // showModal() focuses the first focusable item, which is the System
+    // segment of the Appearance row — so Enter straight after opening would
+    // change the preference. Land on the first list item instead.
     manualItemRef.current?.focus();
   }, []);
 
@@ -946,14 +946,26 @@ export default function ConnectionsOrganizer() {
         onClose={() => { setOverflowOpen(false); setShareStatus(null); }}
       >
         <div className="sheet-body">
-          <button
-            className="sheet-item sheet-item-danger"
-            onClick={() => { closeOverflow(); resetBoard(); }}
-            disabled={!board}
-          >
-            Reset board
-            <span className="sheet-hint">Clears locks and labels</span>
-          </button>
+          {/* A setting, not an action, so it leads the sheet as a control strip
+              rather than sitting among the list rows: the sheet stays open and
+              the board behind it flips at once, which is the feedback. Same
+              aria-pressed pattern as the day switcher. */}
+          <div className="sheet-row">
+            <span id="appearance-label">Appearance</span>
+            <div className="segs" role="group" aria-labelledby="appearance-label">
+              {THEME_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  className="seg"
+                  aria-pressed={themePref === value}
+                  onClick={() => chooseTheme(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             ref={manualItemRef}
             className="sheet-item"
@@ -980,25 +992,6 @@ export default function ConnectionsOrganizer() {
                     : "Copy a link to send to a friend"}
             </span>
           </button>
-          {/* A setting, not an action: the sheet stays open and the board
-              behind it flips at once, which is the feedback. Same
-              aria-pressed pattern as the day switcher. */}
-          <div className="sheet-row">
-            <span id="appearance-label">Appearance</span>
-            <div className="segs" role="group" aria-labelledby="appearance-label">
-              {THEME_OPTIONS.map(({ value, label }) => (
-                <button
-                  key={value}
-                  type="button"
-                  className="seg"
-                  aria-pressed={themePref === value}
-                  onClick={() => chooseTheme(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
           <a
             className="sheet-item"
             href={OFFICIAL_GAME_URL}
@@ -1006,8 +999,20 @@ export default function ConnectionsOrganizer() {
             rel="noopener noreferrer"
             onClick={closeOverflow}
           >
-            Play the official NYT Connections ↗
+            Play the official game ↗
           </a>
+          {/* Destructive, so it comes last and in its own group: a visible band
+              rather than another hairline, which also keeps a thumb aimed at
+              Cancel from landing on it (Reset has no confirm step). */}
+          <hr className="sheet-gap" />
+          <button
+            className="sheet-item sheet-item-danger"
+            onClick={() => { closeOverflow(); resetBoard(); }}
+            disabled={!board}
+          >
+            Reset board
+            <span className="sheet-hint">Clears locks and labels</span>
+          </button>
         </div>
         <button className="sheet-close" onClick={closeOverflow}>Cancel</button>
       </dialog>

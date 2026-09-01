@@ -421,9 +421,19 @@ textarea:focus-visible {
   cursor: pointer;
 }
 .sheet-item + .sheet-item,
-.sheet-item + .sheet-row,
 .sheet-row + .sheet-item { border-top: 1px solid var(--border); }
 .sheet-item-danger { color: var(--error-text); }
+/* Group break ahead of the destructive item: a band of page tone between two
+   hairlines, so Reset reads as its own section (the way grouped lists show
+   the page through between groups) and Cancel below it has a margin. */
+.sheet-gap {
+  height: 8px;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
 .sheet-item:disabled { color: var(--text-faint); }
 .sheet-hint {
   display: block;
@@ -433,8 +443,9 @@ textarea:focus-visible {
   color: var(--text-muted);
 }
 /* A setting rather than an action — a label with a segmented control beside
-   it (Appearance). Not a button: the sheet stays open while it's changed and
-   the board behind it flipping is the feedback. */
+   it (Appearance), leading the sheet as a control strip. Not a button: the
+   sheet stays open while it's changed and the board behind it flipping is
+   the feedback. */
 .sheet-row {
   display: flex;
   align-items: center;

@@ -19,10 +19,12 @@ On the board:
 
 Behind the overflow button (⋯) in the header:
 
-- **Reset board** — clears your locks and labels for the day you're on
+- **Appearance** — System / Light / Dark, remembered on this device
 - **Enter words manually** — type or paste the 16 words yourself, one per line or comma-separated (the fallback if the day's words can't be fetched)
 - **How this works** — a short explainer
+- **Share this site** — sends a link through your device's share sheet, or copies it
 - **Play the official game** — a link back to NYT
+- **Reset board** — clears your locks and labels for the day you're on
 
 Each day's board persists to `localStorage` separately, so you can close the tab and pick up where you left off.
 
