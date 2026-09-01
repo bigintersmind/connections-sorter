@@ -231,9 +231,11 @@ export default function ConnectionsOrganizer() {
   const [shareStatus, setShareStatus] = useState(null);
   const autoLoadedRef = useRef(false);
   const fetchAbortRef = useRef(null);
-  // The live press, from pointerdown to pointerup: { pointerId, from, startX,
-  // startY, rects }. `rects` is null until the press clears the drag threshold
-  // and doubles as the "this is a drag now" flag.
+  // The live press, from pointerdown to pointerup: { pointerId, key, from,
+  // startX, startY, rects }. `key` is the board the press started on, so the
+  // swap it ends in takes the same same-day guard a tap swap does. `rects` is
+  // null until the press clears the drag threshold and doubles as the "this
+  // is a drag now" flag.
   const dragRef = useRef(null);
   // Set for one task after a drag ends, to swallow the click that follows it.
   const suppressClickRef = useRef(false);
@@ -345,6 +347,22 @@ export default function ConnectionsOrganizer() {
     if (a.left < s.left) segs.scrollLeft += a.left - s.left;
     else if (a.right > s.right) segs.scrollLeft += a.right - s.right;
   }, [activeKey]);
+
+  // A press doesn't outlive the grid it was measured against. The grid is
+  // keyed on activeKey and isn't rendered at all on the manual-entry screen,
+  // so a fetch landing mid-drag (or a switch away) remounts every tile under
+  // the finger. Nothing tells the handlers: the pointerup goes to the removed
+  // element (a finger's up is bound to its touchstart target, and for a mouse
+  // the capture is simply gone), and NO pointercancel fires for a removed
+  // capture. commitSwap's same-day guard isn't enough on its own — it protects
+  // the store write, not the press in dragRef or the `drag` state that renders
+  // a tile as carried, and left alone those would paint the NEW tile at that
+  // index translated, ringed and showing the other day's word until the next
+  // press. A layout effect so the stale transform never reaches the screen.
+  useLayoutEffect(() => () => {
+    dragRef.current = null;
+    setDrag(null);
+  }, [activeKey, screen]);
 
   // Cancel an in-flight load so a slow request can't complete later and yank
   // the player onto a day they've since navigated away from.
@@ -525,16 +543,22 @@ export default function ConnectionsOrganizer() {
     // that are about to change would land on the wrong tiles. Same bail as
     // handleTap's.
     if (swapAnim) return;
+    // First pointer wins. A second finger (or a resting palm) landing on a
+    // tile while one is already down is ignored rather than replacing the
+    // press — that would strand the first finger's tile mid-air and let the
+    // second's trailing click select a tile the player never chose.
+    if (dragRef.current) return;
     if (!isTileInPlay(index, lockedRows)) return;
     dragRef.current = {
       pointerId: e.pointerId,
+      key: activeKey,
       from: index,
       startX: e.clientX + window.scrollX,
       startY: e.clientY + window.scrollY,
       rects: null,
     };
     e.currentTarget.setPointerCapture?.(e.pointerId);
-  }, [swapAnim, lockedRows]);
+  }, [swapAnim, lockedRows, activeKey]);
 
   const handleTilePointerMove = useCallback((e) => {
     const press = dragRef.current;
@@ -588,16 +612,18 @@ export default function ConnectionsOrganizer() {
     // it came from, or on a locked row. The tile returns to its place; no
     // swap, and a tile picked up earlier by tap stays picked up.
     if (over === null) return;
-    commitSwap(press.from, over, activeKey);
+    commitSwap(press.from, over, press.key);
     // The drag wins over a pending tap. A tile selected by tap and then left
     // alone while a different pair was dragged is a stale pick-up: the board
     // under it has changed, so clear it rather than let the next tap swap
     // against a position the player didn't choose.
     setSelected(null);
-  }, [lockedRows, commitSwap, activeKey]);
+  }, [lockedRows, commitSwap]);
 
-  // The system took the pointer away (a browser gesture, the element going
-  // away under it). No click follows a cancel, so there's nothing to swallow.
+  // The system took the pointer away (a pan or an edge swipe the browser
+  // claimed for itself). No click follows a cancel, so there's nothing to
+  // swallow. This does NOT fire when the tile is removed from under a captured
+  // pointer — the layout effect on activeKey/screen above covers that.
   const handleTilePointerCancel = useCallback(() => {
     if (!dragRef.current) return;
     dragRef.current = null;
