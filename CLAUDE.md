@@ -26,12 +26,13 @@ Type is **self-hosted Libre Franklin** (the open Franklin Gothic NYT itself uses
 
 ### Accessibility contracts
 
-The board is operated by keyboard and screen reader as much as by touch, and the fixes from the 2026-08-31 audit (#10) are easy to undo by accident:
+The board is operated by keyboard and screen reader as much as by touch, and the fixes from the 2026-08-31 audit (#10, #11) are easy to undo by accident:
 
 - **Never call `scrollIntoView()` on mount or on a day switch.** Chrome moves its sequential-focus starting point to the scrolled element, so the first Tab of a fresh load would land *after* Today. The switcher nudges `scrollLeft` instead (the `activeKey` effect in `App.jsx`).
 - **One live region speaks for a day switch**: the always-mounted `.sr-only` `role="status"` `<p>` in the board view alternates `Loading …` / the failure message. The visible notice bar is deliberately *not* a live region (it arrives pre-populated, which isn't announced), and the hint `<p>` is always rendered (empty without a board) for the same reason — a live region has to exist before its text changes.
 - **Toggles expose state, not glyphs**: tiles and lock buttons carry `aria-pressed`; the ○ / ✓ / ↑ glyphs sit in `aria-hidden` spans. Tiles in a locked row are `aria-disabled` (still focusable so the words stay readable), not `disabled`; `.tile[aria-disabled="true"]` in `index.css` owns their cursor and suppresses the hover lift.
 - **`--text-faint` is decoration and disabled states only** (it's below 4.5:1); running text, hints, placeholders and the footer use `--text-muted`. Never put an inline `outline: none` on a field — the shared `:focus-visible` ring in `index.css` is the only focus treatment, and an inline value would beat it.
+- **Target-size floors are explicit `min-height`s, not padding**: `.seg` 30 px, `.small-btn` 36 px (the day-switcher pill's height, so the header reads as one row at every width), `.ghost-btn` 32 × 32, `lockBtn`/`labelInput` 30 inline. The 320 px header budget noted in `.segs` is a *width* constraint — height is free there, width is not. Safe-area insets (`env(safe-area-inset-*)`) and the `100dvh` min-height live on `#root`, never on the centered container (which would trade board width for the inset in landscape on a notched phone), plus `.sheet-close` in the bottom-sheet variant only.
 
 ### Landing, day switcher, and the per-day store
 
@@ -60,6 +61,8 @@ Keep the answer groupings out of the response: the app is a word *loader*, not a
 Hosted on Cloudflare Workers + Static Assets (see `wrangler.jsonc`). `not_found_handling: "single-page-application"` means unknown paths fall back to `index.html`. The deployed asset set is whatever ends up in `./dist`.
 
 Deploys happen through Cloudflare's GitHub integration on push to `main` — there is no local wrangler credential on this machine, so `npx wrangler deploy` fails without `CLOUDFLARE_API_TOKEN`. To ship: commit and `git push`; Cloudflare builds and deploys automatically.
+
+`npm run build` runs Vite 8 with its default `baseline-widely-available` target and no `browserslist`, so Lightning CSS rewrites `max-width`/`min-width` queries to range syntax (`(width<=380px)`) and drops a `vh` line that precedes `dvh`. That's expected, not a regression; if the support floor ever has to reach older Safari, set `build.cssTarget` in `vite.config.js` rather than hand-editing the output.
 
 ## Agent skills
 

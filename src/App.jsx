@@ -965,7 +965,7 @@ export default function ConnectionsOrganizer() {
 
 const styles = {
   container: {
-    minHeight: "100vh",
+    // min-height and the safe-area insets live on #root (index.css).
     background: "transparent",
     fontFamily: "var(--font)",
     color: "var(--text)",
@@ -1022,7 +1022,11 @@ const styles = {
     alignItems: "center",
     flexWrap: "wrap",
     gap: 2,
-    padding: "8px 12px",
+    // 6px of vertical padding, not 8: the Retry and dismiss buttons inside are
+    // 32px target boxes with no border or fill, so their own height carries
+    // most of the optical padding. 6 and not less because the shared focus ring
+    // (3px, 2px offset) would otherwise land on the bar's own border.
+    padding: "6px 12px",
     marginBottom: 12,
     background: "var(--surface)",
     border: "1px solid var(--border)",
@@ -1101,7 +1105,10 @@ const styles = {
   },
   lockBtn: {
     fontSize: 11.5,
-    padding: "4px 10px",
+    // A target-size floor that doesn't depend on the font's line box, shared
+    // with the label input beside it so the row reads as one line.
+    minHeight: 30,
+    padding: "7px 10px",
     borderRadius: 7,
     border: "1px solid",
     cursor: "pointer",
@@ -1113,7 +1120,8 @@ const styles = {
   labelInput: {
     flex: 1,
     fontSize: 12.5,
-    padding: "5px 10px",
+    minHeight: 30,
+    padding: "6px 10px",
     border: "1px solid",
     borderRadius: 7,
     fontFamily: "var(--font)",

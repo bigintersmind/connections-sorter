@@ -135,6 +135,18 @@ body::before {
 #root {
   position: relative;
   z-index: 1;
+  /* dvh so a collapsing mobile toolbar can't leave the page short; the vh
+     fallback is for pre-2022 engines (the build's minifier already drops it). */
+  min-height: 100vh;
+  min-height: 100dvh;
+  /* `viewport-fit=cover`: the page runs under the notch and the home
+     indicator, so hold the app clear of both here rather than on the centered
+     container — at maxWidth 500 that box already floats ~170px from each edge
+     in landscape and would only trade board width for the inset (measured:
+     480 → 406px). Padding and min-height share this border-box, so the band
+     costs no scroll. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 /* Visually hidden but read aloud — the board is the whole app, so its name
@@ -165,8 +177,13 @@ body::before {
 /* The compact bordered button: Shuffle and the overflow trigger in the board
    header, Retry in the empty state. Sized here rather than inline because the
    narrow-viewport media query further down has to be able to shrink it — an
-   inline value would win over it. */
+   inline value would win over it. The 36px floor is the day switcher's pill
+   height (a 30px segment plus the pill's 2px padding and 1px border), so the
+   header still reads as one line at every width the padding shrinks to. The
+   empty state's Retry comes along for the ride, which only helps its target
+   size. */
 .small-btn {
+  min-height: 36px;
   padding: 7px 12px;
   background: var(--surface);
   color: var(--text);
@@ -207,6 +224,16 @@ body::before {
 .tile[aria-disabled="true"] { cursor: default; }
 
 button:disabled { cursor: not-allowed; }
+/* The borderless buttons — the notice's Retry and dismiss, the empty state's
+   "enter the words yourself". The box carries the WCAG 2.5.8 target size while
+   the glyph keeps its light weight: with no border or fill to draw, the larger
+   hit area is invisible. */
+.ghost-btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  min-height: 32px;
+}
 /* The notice's Retry is disabled while a load is already running — the
    ghost treatment has no border or fill to grey out, so fade it. */
 .ghost-btn:disabled { opacity: 0.5; }
@@ -263,6 +290,11 @@ textarea:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 4px;
+  /* The target-size floor is a min-height rather than padding: the dense and
+     narrow variants below drop the type to 11.5px, where padding alone leaves
+     the segment short. Height is free in the 320px budget above — that one is
+     a width constraint. */
+  min-height: 30px;
   padding: 5px 11px;
   border: none;
   border-radius: 999px;
@@ -405,6 +437,14 @@ textarea:focus-visible {
   font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;
+}
+@media (max-width: 599px) {
+  /* Bottom-sheet variant only: it's anchored to the bottom edge under
+     `viewport-fit=cover`, so its last row runs under the home indicator. The
+     centered card above this width floats clear of every edge, and this
+     variant only exists in portrait widths, where the side insets are zero —
+     so the rows need no horizontal inset. */
+  .sheet-close { padding-bottom: calc(14px + env(safe-area-inset-bottom)); }
 }
 
 /* One-line load failure under the board header — slides in so it reads as an
