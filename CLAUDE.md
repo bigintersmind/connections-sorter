@@ -24,6 +24,15 @@ The `styles` object in `App.jsx` is still inline, but **every color is a `var(--
 
 Type is **self-hosted Libre Franklin** (the open Franklin Gothic NYT itself uses) via `@fontsource-variable/libre-franklin`, imported in `main.jsx` and bundled by Vite — no Google Fonts request (keeps the privacy-forward, own-origin posture). Don't switch it to a CDN `<link>`; the `--font` token already lists the fallback stack.
 
+### Accessibility contracts
+
+The board is operated by keyboard and screen reader as much as by touch, and the fixes from the 2026-08-31 audit (#10) are easy to undo by accident:
+
+- **Never call `scrollIntoView()` on mount or on a day switch.** Chrome moves its sequential-focus starting point to the scrolled element, so the first Tab of a fresh load would land *after* Today. The switcher nudges `scrollLeft` instead (the `activeKey` effect in `App.jsx`).
+- **One live region speaks for a day switch**: the always-mounted `.sr-only` `role="status"` `<p>` in the board view alternates `Loading …` / the failure message. The visible notice bar is deliberately *not* a live region (it arrives pre-populated, which isn't announced), and the hint `<p>` is always rendered (empty without a board) for the same reason — a live region has to exist before its text changes.
+- **Toggles expose state, not glyphs**: tiles and lock buttons carry `aria-pressed`; the ○ / ✓ / ↑ glyphs sit in `aria-hidden` spans. Tiles in a locked row are `aria-disabled` (still focusable so the words stay readable), not `disabled`; `.tile[aria-disabled="true"]` in `index.css` owns their cursor and suppresses the hover lift.
+- **`--text-faint` is decoration and disabled states only** (it's below 4.5:1); running text, hints, placeholders and the footer use `--text-muted`. Never put an inline `outline: none` on a field — the shared `:focus-visible` ring in `index.css` is the only focus treatment, and an inline value would beat it.
+
 ### Landing, day switcher, and the per-day store
 
 The board is the home screen — there is no menu. The header carries a segmented switcher for today plus the two prior days (`RECENT_WINDOW_DAYS = 2` in `shared/puzzleDates.js`, enforced server-side too, so a hand-crafted `?date=` can't reach further back than the switcher offers); everything rarely needed (Reset, manual entry, "how this works", "share this site", the official-game link) sits behind one overflow button. Share uses the native share sheet where `navigator.share` exists and the clipboard elsewhere; the shared URL carries `?utm_source=share`, which `main.jsx` strips with `replaceState` before the first render. Tapping a day whose board is saved switches instantly with no network; a day with no saved board fetches in place, leaving the current board on screen until the words arrive.

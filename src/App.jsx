@@ -238,11 +238,19 @@ export default function ConnectionsOrganizer() {
   // The switcher is sized to fit every segment down to 320px, but it scrolls
   // rather than collide if a font ever blows that budget (see .segs in
   // index.css) — in which case the day you just switched to has to be the one
-  // you can see.
+  // you can see. Deliberately not scrollIntoView: that also moves Chrome's
+  // sequential-focus starting point, so the first Tab of a fresh load would
+  // land *after* Today. Nudging scrollLeft has no such side effect. The
+  // "nearest" arithmetic below is self-limiting — when the pill fits, the
+  // active segment is already inside it and neither branch runs.
   useEffect(() => {
-    segsRef.current
-      ?.querySelector('[aria-pressed="true"]')
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const segs = segsRef.current;
+    const active = segs?.querySelector('[aria-pressed="true"]');
+    if (!segs || !active) return;
+    const s = segs.getBoundingClientRect();
+    const a = active.getBoundingClientRect();
+    if (a.left < s.left) segs.scrollLeft += a.left - s.left;
+    else if (a.right > s.right) segs.scrollLeft += a.right - s.right;
   }, [activeKey]);
 
   // Cancel an in-flight load so a slow request can't complete later and yank
@@ -502,10 +510,11 @@ export default function ConnectionsOrganizer() {
 
   if (screen === "manual") {
     return (
-      <div style={styles.container}>
+      // The whole screen is the form, so the container itself is the landmark.
+      <main style={styles.container}>
         <div style={{ ...styles.header, paddingTop: 12, paddingBottom: 0 }}>
-          <h1 style={{ ...styles.title, fontSize: 20 }}>Enter 16 Words</h1>
-          <p style={styles.subtitle}>One per line, or comma-separated</p>
+          <h1 id="manual-heading" style={{ ...styles.title, fontSize: 20 }}>Enter 16 Words</h1>
+          <p id="manual-subtitle" style={styles.subtitle}>One per line, or comma-separated</p>
         </div>
         <textarea
           style={styles.textarea}
@@ -513,6 +522,11 @@ export default function ConnectionsOrganizer() {
           placeholder={"CHEESE\nMAGIC WAND\nSOCKET\nDONKEY\nGREEN CHEESE\nECLIPSE\nTHIMBLE\nEASY ANSWER\nTIDE\nPANACEA\nBOOT\nWEREWOLF\nPLAYING CARD\nIRON\nTOP HAT\nSILVER BULLET"}
           value={manualText}
           onChange={(e) => { setManualText(e.target.value); setManualError(null); }}
+          // The heading names the field and the subtitle states its format;
+          // the count error joins the description only while it exists.
+          aria-labelledby="manual-heading"
+          aria-describedby={manualError ? "manual-subtitle manual-error" : "manual-subtitle"}
+          aria-invalid={Boolean(manualError)}
           autoFocus
         />
         <div style={styles.btnRow}>
@@ -539,8 +553,12 @@ export default function ConnectionsOrganizer() {
             }
           }}>Load Puzzle</button>
         </div>
-        {manualError && <p style={styles.error}>{manualError}</p>}
-      </div>
+        {manualError && (
+          <p id="manual-error" role="alert" style={styles.error}>
+            {manualError}
+          </p>
+        )}
+      </main>
     );
   }
 
@@ -548,255 +566,302 @@ export default function ConnectionsOrganizer() {
 
   return (
     <div style={styles.container}>
-      {/* The board is the whole app, so its name lives in the document title
-          and here for assistive tech rather than taking up a header row. */}
-      <h1 className="sr-only">Connections Sorter</h1>
+      {/* The board and everything that acts on it. The footer and the
+          two sheets sit outside the landmark. */}
+      <main>
+        {/* The board is the whole app, so its name lives in the document title
+            and here for assistive tech rather than taking up a header row. */}
+        <h1 className="sr-only">Connections Sorter</h1>
 
-      <div style={styles.boardHeader}>
-        {/* Segment styling (including the four-segment dense variant) lives in
-            index.css: inline styles can't express a modifier class, and the
-            dense padding is what keeps four segments on one row at 320px. */}
-        <div
-          ref={segsRef}
-          className={entries.length > 3 ? "segs segs-dense" : "segs"}
-          role="group"
-          aria-label="Puzzle day"
-        >
-          {entries.map((entry) => {
-            const isActive = activeKey === entry.key && !launching;
-            const isLoading = fetchingKey === entry.key;
-            const locks = entry.lockedCount === 1 ? "1 group locked" : `${entry.lockedCount} groups locked`;
-            // The weekday segments are labelled with the head of their own date
-            // text ("Fri" / "Fri, Aug 14"), so prefixing there would announce
-            // "Fri, Fri, Aug 14". Only prefix when the label adds something.
-            const spoken = entry.dateText.startsWith(entry.label)
-              ? entry.dateText
-              : `${entry.label}, ${entry.dateText}`;
-            return (
-              <button
-                key={entry.key}
-                className="seg"
-                aria-pressed={isActive}
-                aria-label={entry.lockedCount > 0 ? `${spoken}, ${locks}` : spoken}
-                onClick={() => loadDay(entry.key)}
-              >
-                {entry.label}
-                {/* The dot marks days you have a board on but aren't looking
-                    at — the resume affordance. On the active segment it would
-                    only restate the fill. */}
-                {isLoading ? (
-                  <span className="seg-spin" aria-hidden="true" />
-                ) : entry.started && !isActive ? (
-                  <span className="seg-dot" aria-hidden="true" />
-                ) : null}
-              </button>
-            );
-          })}
+        <div style={styles.boardHeader}>
+          {/* Segment styling (including the four-segment dense variant) lives in
+              index.css: inline styles can't express a modifier class, and the
+              dense padding is what keeps four segments on one row at 320px. */}
+          <div
+            ref={segsRef}
+            className={entries.length > 3 ? "segs segs-dense" : "segs"}
+            role="group"
+            aria-label="Puzzle day"
+          >
+            {entries.map((entry) => {
+              const isActive = activeKey === entry.key && !launching;
+              const isLoading = fetchingKey === entry.key;
+              const locks = entry.lockedCount === 1 ? "1 group locked" : `${entry.lockedCount} groups locked`;
+              // The weekday segments are labelled with the head of their own date
+              // text ("Fri" / "Fri, Aug 14"), so prefixing there would announce
+              // "Fri, Fri, Aug 14". Only prefix when the label adds something.
+              const spoken = entry.dateText.startsWith(entry.label)
+                ? entry.dateText
+                : `${entry.label}, ${entry.dateText}`;
+              return (
+                <button
+                  key={entry.key}
+                  className="seg"
+                  aria-pressed={isActive}
+                  aria-label={entry.lockedCount > 0 ? `${spoken}, ${locks}` : spoken}
+                  onClick={() => loadDay(entry.key)}
+                >
+                  {entry.label}
+                  {/* The dot marks days you have a board on but aren't looking
+                      at — the resume affordance. On the active segment it would
+                      only restate the fill. */}
+                  {isLoading ? (
+                    <span className="seg-spin" aria-hidden="true" />
+                  ) : entry.started && !isActive ? (
+                    <span className="seg-dot" aria-hidden="true" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={styles.headerActions}>
+            <button
+              className="btn small-btn"
+              onClick={shuffleUnlocked}
+              disabled={!board}
+            >
+              Shuffle
+            </button>
+            <button
+              className="btn small-btn icon-btn"
+              onClick={openOverflow}
+              aria-label="More options"
+              aria-haspopup="dialog"
+              aria-expanded={overflowOpen}
+            >
+              ⋯
+            </button>
+          </div>
         </div>
 
-        <div style={styles.headerActions}>
-          <button
-            className="btn small-btn"
-            onClick={shuffleUnlocked}
-            disabled={!board}
-          >
-            Shuffle
-          </button>
-          <button
-            className="btn small-btn icon-btn"
-            onClick={openOverflow}
-            aria-label="More options"
-            aria-haspopup="dialog"
-            aria-expanded={overflowOpen}
-          >
-            ⋯
-          </button>
-        </div>
-      </div>
+        {/* A failed switch keeps the current board and says so in one line. With
+            no board on screen the same failure renders inside the empty state
+            below instead. Not a live region itself: it arrives already
+            populated, which is exactly the case a live region doesn't announce
+            — the standing sr-only status below speaks it instead. */}
+        {board && loadError && (
+          <div className="notice" style={styles.notice}>
+            <span>{loadError.message}</span>
+            <button
+              className="ghost-btn"
+              style={styles.noticeAction}
+              onClick={() => loadDay(loadError.key)}
+              disabled={fetchingKey !== null}
+            >
+              Retry
+            </button>
+            <button
+              className="ghost-btn"
+              style={styles.noticeDismiss}
+              onClick={() => setLoadError(null)}
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
-      {/* A failed switch keeps the current board and says so in one line. With
-          no board on screen the same failure renders inside the empty state
-          below instead. */}
-      {board && loadError && (
-        <div className="notice" style={styles.notice} role="status">
-          <span>{loadError.message}</span>
-          <button
-            className="ghost-btn"
-            style={styles.noticeAction}
-            onClick={() => loadDay(loadError.key)}
-            disabled={fetchingKey !== null}
-          >
-            Retry
-          </button>
-          <button
-            className="ghost-btn"
-            style={styles.noticeDismiss}
-            onClick={() => setLoadError(null)}
-            aria-label="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
+        {board ? (
+          // Keyed by the active board so switching days replays the staggered
+          // entrance instead of swapping words in place.
+          <div key={activeKey} style={styles.grid}>
+            {[0, 1, 2, 3].map(rowIdx => {
+              const locked = lockedRows[rowIdx];
+              const flashing = flashRow === rowIdx;
+              const color = ROW_COLORS[rowIdx];
 
-      {board ? (
-        // Keyed by the active board so switching days replays the staggered
-        // entrance instead of swapping words in place.
-        <div key={activeKey} style={styles.grid}>
-          {[0, 1, 2, 3].map(rowIdx => {
-            const locked = lockedRows[rowIdx];
-            const flashing = flashRow === rowIdx;
-            const color = ROW_COLORS[rowIdx];
+              return (
+                // Each row is a lock toggle, a label field and four tiles; the
+                // group names it so a screen reader knows which row it's in.
+                <div key={rowIdx} role="group" aria-label={`${color.name} row`}>
+                  <div style={styles.rowControl}>
+                    <button
+                      className="btn"
+                      style={{
+                        ...styles.lockBtn,
+                        background: locked ? color.bg : "transparent",
+                        color: locked ? color.text : "var(--text-muted)",
+                        borderColor: locked ? color.bg : "var(--border-strong)",
+                        fontWeight: locked ? 800 : 600,
+                      }}
+                      aria-pressed={locked}
+                      aria-label={`Lock ${color.name} row`}
+                      onClick={() => toggleLock(rowIdx)}
+                    >
+                      {/* The glyph restates aria-pressed, so hide it and leave
+                          the color as the button's whole accessible name. */}
+                      <span aria-hidden="true">{locked ? "✓ " : "○ "}</span>
+                      {color.name}
+                    </button>
+                    <input
+                      style={{
+                        ...styles.labelInput,
+                        borderColor: locked ? `${color.bg}aa` : "var(--border)",
+                        background: locked ? `${color.bg}22` : "var(--input-bg)",
+                        // Once locked, the row is settled — let its label recede so
+                        // the lock button + colored tiles carry the row.
+                        color: locked ? "var(--text-soft)" : "var(--text)",
+                      }}
+                      placeholder="Category label…"
+                      aria-label={`${color.name} row label`}
+                      value={labels[rowIdx]}
+                      onChange={(e) => updateLabel(rowIdx, e.target.value)}
+                    />
+                  </div>
 
-            return (
-              <div key={rowIdx}>
-                <div style={styles.rowControl}>
-                  <button
-                    className="btn"
-                    style={{
-                      ...styles.lockBtn,
-                      background: locked ? color.bg : "transparent",
-                      color: locked ? color.text : "var(--text-muted)",
-                      borderColor: locked ? color.bg : "var(--border-strong)",
-                      fontWeight: locked ? 800 : 600,
-                    }}
-                    onClick={() => toggleLock(rowIdx)}
-                  >
-                    {locked ? "✓ " + color.name : "○ " + color.name}
-                  </button>
-                  <input
-                    style={{
-                      ...styles.labelInput,
-                      borderColor: locked ? `${color.bg}aa` : "var(--border)",
-                      background: locked ? `${color.bg}22` : "var(--input-bg)",
-                      // Once locked, the row is settled — let its label recede so
-                      // the lock button + colored tiles carry the row.
-                      color: locked ? "var(--text-soft)" : "var(--text)",
-                      opacity: locked ? 0.75 : 1,
-                    }}
-                    placeholder="Category label…"
-                    value={labels[rowIdx]}
-                    onChange={(e) => updateLabel(rowIdx, e.target.value)}
-                  />
-                </div>
+                  <div style={styles.tileRow}>
+                    {[0, 1, 2, 3].map(colIdx => {
+                      const idx = rowIdx * 4 + colIdx;
+                      const isSelected = selected === idx;
+                      const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
+                      const word = tiles[idx] || "";
+                      // Cascade the entrance top-left → bottom-right, capped so the
+                      // last tile doesn't lag noticeably behind the first.
+                      const revealDelay = Math.min(idx * 22, 330);
 
-                <div style={styles.tileRow}>
-                  {[0, 1, 2, 3].map(colIdx => {
-                    const idx = rowIdx * 4 + colIdx;
-                    const isSelected = selected === idx;
-                    const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
-                    const word = tiles[idx] || "";
-                    // Cascade the entrance top-left → bottom-right, capped so the
-                    // last tile doesn't lag noticeably behind the first.
-                    const revealDelay = Math.min(idx * 22, 330);
+                      // Precedence mirrors the original: locked fill wins over the
+                      // selected (picked-up) state; flashing only deepens a locked
+                      // tile's glow. Colors flow through CSS vars so the board
+                      // tracks the light/dark theme automatically.
+                      let bg, fg, borderColor, boxShadow;
+                      if (locked) {
+                        bg = color.bg;
+                        fg = color.text;
+                        borderColor = "transparent";
+                        boxShadow = flashing
+                          ? `0 0 0 1px ${color.bg}, 0 8px 26px ${color.glow}, 0 0 32px ${color.glow}`
+                          : `0 2px 8px ${color.glow}`;
+                      } else if (isSelected) {
+                        bg = "var(--selected-bg)";
+                        fg = "var(--selected-text)";
+                        borderColor = "transparent";
+                        boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
+                      } else {
+                        bg = "var(--tile-bg)";
+                        fg = "var(--tile-text)";
+                        borderColor = "var(--tile-border)";
+                        boxShadow = "var(--tile-shadow)";
+                      }
+                      // Selected tiles lift (you "pick them up"); the partner tile
+                      // tucks during the swap. Resting and locked tiles get no
+                      // inline transform so the CSS `.tile:hover` lift can apply
+                      // (an inline transform would always win over it).
+                      const liftTransform = isSelected
+                        ? "scale(1.05)"
+                        : isSwapping
+                        ? "scale(0.9)"
+                        : undefined;
 
-                    // Precedence mirrors the original: locked fill wins over the
-                    // selected (picked-up) state; flashing only deepens a locked
-                    // tile's glow. Colors flow through CSS vars so the board
-                    // tracks the light/dark theme automatically.
-                    let bg, fg, borderColor, boxShadow;
-                    if (locked) {
-                      bg = color.bg;
-                      fg = color.text;
-                      borderColor = "transparent";
-                      boxShadow = flashing
-                        ? `0 0 0 1px ${color.bg}, 0 8px 26px ${color.glow}, 0 0 32px ${color.glow}`
-                        : `0 2px 8px ${color.glow}`;
-                    } else if (isSelected) {
-                      bg = "var(--selected-bg)";
-                      fg = "var(--selected-text)";
-                      borderColor = "transparent";
-                      boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
-                    } else {
-                      bg = "var(--tile-bg)";
-                      fg = "var(--tile-text)";
-                      borderColor = "var(--tile-border)";
-                      boxShadow = "var(--tile-shadow)";
-                    }
-                    // Selected tiles lift (you "pick them up"); the partner tile
-                    // tucks during the swap. Resting and locked tiles get no
-                    // inline transform so the CSS `.tile:hover` lift can apply
-                    // (an inline transform would always win over it).
-                    const liftTransform = isSelected
-                      ? "scale(1.05)"
-                      : isSwapping
-                      ? "scale(0.9)"
-                      : undefined;
-
-                    return (
-                      <div
-                        key={idx}
-                        className="reveal"
-                        style={{ ...styles.tileCell, animationDelay: `${revealDelay}ms` }}
-                      >
-                        <button
-                          className="tile"
-                          ref={el => (tileRefs.current[idx] = el)}
-                          onClick={() => handleTap(idx)}
-                          style={{
-                            ...styles.tile,
-                            background: bg,
-                            color: fg,
-                            borderColor,
-                            // fontSize is owned by fitTileFont (DOM-measured),
-                            // not React, so it isn't reset on re-render.
-                            transform: liftTransform,
-                            boxShadow,
-                            animation: flashing ? "lockPop 0.45s ease" : "none",
-                          }}
+                      return (
+                        <div
+                          key={idx}
+                          className="reveal"
+                          style={{ ...styles.tileCell, animationDelay: `${revealDelay}ms` }}
                         >
-                          {word}
-                        </button>
-                      </div>
-                    );
-                  })}
+                          <button
+                            className="tile"
+                            ref={el => (tileRefs.current[idx] = el)}
+                            aria-pressed={isSelected}
+                            // A locked row's tiles ignore taps (handleTap returns
+                            // early). aria-disabled rather than disabled: the
+                            // words still have to be readable from the keyboard.
+                            aria-disabled={locked}
+                            onClick={() => handleTap(idx)}
+                            style={{
+                              ...styles.tile,
+                              background: bg,
+                              color: fg,
+                              borderColor,
+                              // fontSize is owned by fitTileFont (DOM-measured),
+                              // not React, so it isn't reset on re-render.
+                              transform: liftTransform,
+                              boxShadow,
+                              animation: flashing ? "lockPop 0.45s ease" : "none",
+                            }}
+                          >
+                            {word}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        // No board on screen: the launch fetch is still running, or it failed
-        // and this is the only thing the app can offer. Same footprint as the
-        // grid so the header doesn't jump when the words arrive.
-        <div style={styles.emptyWrap}>
-          {/* A retry from here puts the spinner back, so the failure message
-              never sits above a button that looks like it did nothing. */}
-          {loadError && !fetchingKey ? (
+              );
+            })}
+          </div>
+        ) : (
+          // No board on screen: the launch fetch is still running, or it failed
+          // and this is the only thing the app can offer. Same footprint as the
+          // grid so the header doesn't jump when the words arrive.
+          <div style={styles.emptyWrap}>
+            {/* A retry from here puts the spinner back, so the failure message
+                never sits above a button that looks like it did nothing. */}
+            {loadError && !fetchingKey ? (
+              <>
+                <p style={styles.emptyText} role="status">{loadError.message}.</p>
+                <button
+                  className="btn small-btn"
+                  onClick={() => loadDay(loadError.key)}
+                >
+                  Retry
+                </button>
+                <button
+                  className="ghost-btn"
+                  style={styles.linkBtn}
+                  onClick={() => setScreen("manual")}
+                >
+                  or enter the words yourself
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={styles.spinner} aria-hidden="true" />
+                <p style={styles.emptyText} role="status">
+                  Loading {loadingDay ?? "today's"} puzzle…
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* The whole spoken account of a day switch, from one element that is
+            always mounted: a live region has to be in the DOM before its text
+            arrives, or the arrival isn't announced. It alternates
+            loading → error → loading, so a retry that fails again still reads
+            as a change (the text flips to "Loading…" first) rather than an
+            unchanged string. The visible cues it stands in for are both
+            silent: the segment spinner is aria-hidden and the notice arrives
+            pre-populated. The board-less state has its own visible
+            role="status", so this element exists only while a board does and
+            the two can't double up. */}
+        {board && (
+          <p className="sr-only" role="status">
+            {loadingDay
+              ? `Loading ${loadingDay} puzzle…`
+              : loadError
+                ? loadError.message
+                : ""}
+          </p>
+        )}
+
+        {/* Always rendered, for the same reason: the hint flips to the swap
+            instruction the moment a tile is picked up, and that flip is only
+            announced if the region was already there. */}
+        <p style={styles.boardHint} aria-live="polite">
+          {!board ? (
+            ""
+          ) : selected !== null ? (
             <>
-              <p style={styles.emptyText} role="status">{loadError.message}.</p>
-              <button
-                className="btn small-btn"
-                onClick={() => loadDay(loadError.key)}
-              >
-                Retry
-              </button>
-              <button
-                className="ghost-btn"
-                style={styles.linkBtn}
-                onClick={() => setScreen("manual")}
-              >
-                or enter the words yourself
-              </button>
+              {/* The arrow points at the picked-up tile on screen; spoken, it
+                  would just prefix the sentence with "up arrow". */}
+              <span aria-hidden="true">↑ </span>Tap another tile to swap
             </>
           ) : (
-            <>
-              <div style={styles.spinner} aria-hidden="true" />
-              <p style={styles.emptyText} role="status">
-                Loading {loadingDay ?? "today's"} puzzle…
-              </p>
-            </>
+            "Tap a tile to select, then another to swap"
           )}
-        </div>
-      )}
-
-      {board && (
-        <p style={styles.boardHint}>
-          {selected !== null
-            ? "↑ Tap another tile to swap"
-            : "Tap a tile to select, then another to swap"}
         </p>
-      )}
+      </main>
 
       <footer style={styles.footer}>
         Connections Sorter is an independent helper, not affiliated with The New
@@ -1051,7 +1116,6 @@ const styles = {
     padding: "5px 10px",
     border: "1px solid",
     borderRadius: 7,
-    outline: "none",
     fontFamily: "var(--font)",
     color: "var(--text)",
     transition: "all 0.2s",
@@ -1074,7 +1138,8 @@ const styles = {
     height: "100%",
     border: "1.5px solid transparent",
     borderRadius: 11,
-    cursor: "pointer",
+    // cursor lives in index.css (.tile): a locked row's tiles need a variant,
+    // and an inline value would win over it.
     fontWeight: 700,
     fontFamily: "var(--font)",
     textTransform: "uppercase",
@@ -1104,13 +1169,13 @@ const styles = {
   boardHint: {
     textAlign: "center",
     fontSize: 12.5,
-    color: "var(--text-faint)",
+    color: "var(--text-muted)",
     marginTop: 16,
   },
   footer: {
     textAlign: "center",
     fontSize: 12,
-    color: "var(--text-faint)",
+    color: "var(--text-muted)",
     lineHeight: 1.5,
     margin: "18px auto 0",
     maxWidth: 340,
@@ -1136,7 +1201,7 @@ const styles = {
   },
   howNote: {
     fontSize: 12.5,
-    color: "var(--text-faint)",
+    color: "var(--text-muted)",
     lineHeight: 1.45,
     margin: "14px 0 0",
   },
@@ -1160,7 +1225,6 @@ const styles = {
     color: "var(--text)",
     boxSizing: "border-box",
     resize: "vertical",
-    outline: "none",
     marginTop: 16,
   },
   btnRow: {
