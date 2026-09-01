@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { fitTileFont } from "./fitTileFont.js";
+import { fitTileFonts } from "./fitTileFont.js";
 import { SITE_URL, sharePayload } from "./share.js";
 import {
   THEME_COLORS,
@@ -218,6 +218,7 @@ export default function ConnectionsOrganizer() {
   const autoLoadedRef = useRef(false);
   const fetchAbortRef = useRef(null);
   const tileRefs = useRef([]);
+  const gridRef = useRef(null);
   const segsRef = useRef(null);
   const overflowRef = useRef(null);
   const manualItemRef = useRef(null);
@@ -234,24 +235,38 @@ export default function ConnectionsOrganizer() {
   // Shrink-to-fit every tile's font once the board is on screen and whenever
   // the words change. `screen` is a dep so tiles get fit on the way back from
   // manual entry; `activeKey` because a day switch replaces the board.
-  // Re-fits on resize (which also fires on device rotation) so words stay whole
-  // at any width.
   useLayoutEffect(() => {
-    const fitAll = () => {
-      for (const el of tileRefs.current) {
-        if (el) fitTileFont(el);
-      }
-    };
+    // fitAll reads the live tileRefs, so a late call after a re-render is
+    // harmless (unmounted tiles are null and skipped).
+    const fitAll = () => fitTileFonts(tileRefs.current);
     fitAll();
-    // Libre Franklin is self-hosted and loads async, so the pre-paint pass above
-    // can measure the fallback font, whose metrics differ. Re-fit once the real
-    // font lands so a long word isn't frozen at a fallback-measured size.
-    // `fonts.ready` resolves immediately when fonts are already in, so this is
-    // one extra pass at most; fitAll reads the live tileRefs, so a late resolve
-    // after a re-render is harmless (unmounted tiles are null and skipped).
-    document.fonts?.ready.then(fitAll);
-    window.addEventListener("resize", fitAll);
-    return () => window.removeEventListener("resize", fitAll);
+
+    // Libre Franklin is self-hosted and loads async. index.html preloads the
+    // latin subset so it's normally in before the first render, but on a cold
+    // cache the pass above can still measure the fallback face, whose metrics
+    // differ. Ask for the faces the board's words need — the tile text picks
+    // up latin-ext when a word has an accent — and re-fit once they're in.
+    // fonts.load over fonts.ready because it names the faces: ready can
+    // resolve before a load the next layout is about to start, and it's the
+    // layout that starts one. A rejected load (the file failed to arrive)
+    // means the fallback is what's on screen, so the sizes already fitted to
+    // it are the right ones — nothing to do.
+    const first = tileRefs.current.find(Boolean);
+    if (first && document.fonts?.load) {
+      const { fontWeight, fontFamily } = getComputedStyle(first);
+      document.fonts.load(`${fontWeight} 1em ${fontFamily}`, tiles.join(" ")).then(fitAll, () => {});
+    }
+
+    // Re-fit when the tiles change size: rotation, a window drag, a scrollbar
+    // appearing. A ResizeObserver rather than the resize event because it
+    // fires only when the grid's box actually changed, once per frame, after
+    // layout and before paint — so the geometry reads inside fitTileFonts
+    // are free and the new sizes land in the same frame, with no throttle
+    // of our own. (Its first notification, on observe, is a redundant pass;
+    // fitTileFonts skips the writes when nothing changed.)
+    const observer = new ResizeObserver(fitAll);
+    if (gridRef.current) observer.observe(gridRef.current);
+    return () => observer.disconnect();
   }, [tiles, screen, activeKey]);
 
   // Persist the whole store on every change. Writing through serializeStore
@@ -723,7 +738,7 @@ export default function ConnectionsOrganizer() {
         {board ? (
           // Keyed by the active board so switching days replays the staggered
           // entrance instead of swapping words in place.
-          <div key={activeKey} style={styles.grid}>
+          <div key={activeKey} ref={gridRef} style={styles.grid}>
             {[0, 1, 2, 3].map(rowIdx => {
               const locked = lockedRows[rowIdx];
               const flashing = flashRow === rowIdx;
@@ -832,8 +847,9 @@ export default function ConnectionsOrganizer() {
                               background: bg,
                               color: fg,
                               borderColor,
-                              // fontSize is owned by fitTileFont (DOM-measured),
-                              // not React, so it isn't reset on re-render.
+                              // fontSize is owned by fitTileFonts (measured
+                              // against the tile), not React, so it isn't
+                              // reset on re-render.
                               transform: liftTransform,
                               boxShadow,
                             }}
@@ -1218,7 +1234,7 @@ const styles = {
     // min-content, so an unbreakable long word (PENNSYLVANIA) would blow the
     // column wider than its share and push the grid past the viewport. Capping
     // at 0 keeps all four columns equal and lets the word overflow its cell,
-    // which is exactly what fitTileFont measures and shrinks to fit.
+    // which is exactly what fitTileFonts measures and shrinks to fit.
     gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
     gap: 6,
   },
@@ -1242,14 +1258,14 @@ const styles = {
     justifyContent: "center",
     textAlign: "center",
     // Horizontal padding keeps words off the box edges (matching the official
-    // app). It's part of clientWidth, so fitTileFont shrinks long words a touch
+    // app). It's part of clientWidth, so fitTileFonts shrinks long words a touch
     // more to respect this margin rather than letting them run to the side.
     // Tuned empirically: more than this tips a two-word tile into wrapping on a
     // narrow (~375px) phone.
     padding: "5px 5px",
     WebkitTapHighlightColor: "transparent",
     // Wrap only at spaces — never split a word. Single words that are too wide
-    // are shrunk to fit by fitTileFont instead of being broken mid-string.
+    // are shrunk to fit by fitTileFonts instead of being broken mid-string.
     overflowWrap: "normal",
     wordBreak: "normal",
     hyphens: "none",
