@@ -1268,7 +1268,7 @@ export default function ConnectionsOrganizer() {
           <h2 id="how-heading" style={styles.howHeading}>How this works</h2>
           <ol style={styles.howList}>
             <li>Today's words load automatically. Switch to yesterday's or the day before from the header.</li>
-            <li>Tap two tiles to swap them. Group words you think share a category into the same row.</li>
+            <li>Tap two tiles to swap them, or drag one onto another. Group words you think share a category into the same row.</li>
             <li>Lock rows you're confident in, then enter your guesses on the official NYT game.</li>
           </ol>
           <p style={styles.howNote}>
