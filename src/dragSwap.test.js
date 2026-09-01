@@ -158,4 +158,20 @@ describe("dropTargetIndex", () => {
     expect(dropTargetIndex(rects, 150, 50, 0, NO_LOCKS)).toBe(1);
     expect(dropTargetIndex(rects, 150, 350, 0, NO_LOCKS)).toBe(13);
   });
+
+  it("cancels when the source's own row was locked under it mid-drag", () => {
+    // Tile 0 was picked up unlocked; its row got locked while it was in the
+    // air. The release over an unlocked tile must not move it.
+    const locks = [true, false, false, false];
+    expect(dropTargetIndex(rects, 250, 150, 0, locks)).toBeNull();
+    // The same release from a source that is still in play lands as before.
+    expect(dropTargetIndex(rects, 250, 150, 4, locks)).toBe(6);
+  });
+
+  it("re-checks both ends: a source and a target in different locked rows", () => {
+    const locks = [true, false, true, false];
+    expect(dropTargetIndex(rects, 50, 250, 0, locks)).toBeNull();
+    expect(dropTargetIndex(rects, 50, 350, 0, locks)).toBeNull();
+    expect(dropTargetIndex(rects, 50, 350, 4, locks)).toBe(12);
+  });
 });

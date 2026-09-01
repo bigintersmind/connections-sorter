@@ -59,8 +59,13 @@ export function tileIndexAt(rects, x, y) {
 
 // Where a drag that started on `from` would land if it were released at
 // (x, y) — or null, which is every way a release does nothing: off the board,
-// back on the tile it came from, or on a locked row's tile.
+// back on the tile it came from, on a locked row's tile, or from a tile whose
+// OWN row was locked under it while it was in the air. Both ends are checked
+// at the moment of release, not just the destination: the lock button stays
+// reachable while a tile is held (keyboard Space, a second finger), and
+// handleTap re-checks the picked-up tile's row the same way before a tap swap.
 export function dropTargetIndex(rects, x, y, from, lockedRows) {
+  if (!isTileInPlay(from, lockedRows)) return null;
   const over = tileIndexAt(rects, x, y);
   if (over === null || over === from) return null;
   return isTileInPlay(over, lockedRows) ? over : null;

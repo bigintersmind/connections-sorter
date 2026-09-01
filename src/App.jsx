@@ -545,9 +545,15 @@ export default function ConnectionsOrganizer() {
     if (swapAnim) return;
     // First pointer wins. A second finger (or a resting palm) landing on a
     // tile while one is already down is ignored rather than replacing the
-    // press — that would strand the first finger's tile mid-air and let the
-    // second's trailing click select a tile the player never chose.
-    if (dragRef.current) return;
+    // press, which would strand the first finger's tile mid-air. That is all
+    // this guarantees: the refused contact's pointerdown returns before
+    // setting anything, so nothing here suppresses a click for it — Chrome
+    // and Safari don't synthesize a tap for a contact that lands while
+    // another is down, and that is the browser's doing, not ours. A press
+    // from the SAME pointer id is taken over instead: one pointer can't go
+    // down twice without coming up, so its earlier press can only be an
+    // orphan whose release never reached the tile (see cancelPress).
+    if (dragRef.current && dragRef.current.pointerId !== e.pointerId) return;
     if (!isTileInPlay(index, lockedRows)) return;
     dragRef.current = {
       pointerId: e.pointerId,
@@ -609,8 +615,9 @@ export default function ConnectionsOrganizer() {
       lockedRows,
     );
     // Released on nothing that can take it — off the board, back on the tile
-    // it came from, or on a locked row. The tile returns to its place; no
-    // swap, and a tile picked up earlier by tap stays picked up.
+    // it came from, on a locked row, or with its own row locked under it
+    // while it was in the air. The tile returns to its place; no swap, and a
+    // tile picked up earlier by tap stays picked up.
     if (over === null) return;
     commitSwap(press.from, over, press.key);
     // The drag wins over a pending tap. A tile selected by tap and then left
@@ -620,15 +627,30 @@ export default function ConnectionsOrganizer() {
     setSelected(null);
   }, [lockedRows, commitSwap]);
 
-  // The system took the pointer away (a pan or an edge swipe the browser
-  // claimed for itself). No click follows a cancel, so there's nothing to
-  // swallow. This does NOT fire when the tile is removed from under a captured
-  // pointer — the layout effect on activeKey/screen above covers that.
-  const handleTilePointerCancel = useCallback(() => {
+  // The press ended without a release the tile gets to see. Serves two
+  // signals: pointercancel — the system took the pointer away, a pan or an
+  // edge swipe the browser claimed for itself — and window blur, below. No
+  // click follows either, so there's nothing to swallow. Neither fires when
+  // the tile is removed from under a captured pointer; the layout effect on
+  // activeKey/screen above covers that.
+  const cancelPress = useCallback(() => {
     if (!dragRef.current) return;
     dragRef.current = null;
     setDrag(null);
   }, []);
+
+  // Window blur is a REQUIRED cancel signal, not a redundant one. A mouse drag
+  // interrupted by Alt-Tab or a system dialog is released in another app, and
+  // no pointerup or pointercancel ever reaches the tile — drag libraries cancel
+  // on blur for exactly this reason. Left alone, that press would stay live:
+  // first-pointer-wins would refuse every later drag, the tile would float
+  // where it was left, and with a mouse — whose pointer id never changes — the
+  // next plain click's pointerup would match the stale press and replay it as
+  // a swap against rects measured before the interruption.
+  useEffect(() => {
+    window.addEventListener("blur", cancelPress);
+    return () => window.removeEventListener("blur", cancelPress);
+  }, [cancelPress]);
 
   const toggleLock = useCallback((rowIdx) => {
     if (!lockedRows[rowIdx]) {
@@ -1039,7 +1061,7 @@ export default function ConnectionsOrganizer() {
                             onPointerDown={(e) => handleTilePointerDown(idx, e)}
                             onPointerMove={handleTilePointerMove}
                             onPointerUp={handleTilePointerUp}
-                            onPointerCancel={handleTilePointerCancel}
+                            onPointerCancel={cancelPress}
                             style={{
                               ...styles.tile,
                               background: bg,
