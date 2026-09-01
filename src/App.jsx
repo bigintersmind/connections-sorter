@@ -753,6 +753,7 @@ export default function ConnectionsOrganizer() {
                       {color.name}
                     </button>
                     <input
+                      className="label-input"
                       style={{
                         ...styles.labelInput,
                         borderColor: locked ? `${color.bg}aa` : "var(--border)",
@@ -818,7 +819,7 @@ export default function ConnectionsOrganizer() {
                           style={{ ...styles.tileCell, animationDelay: `${revealDelay}ms` }}
                         >
                           <button
-                            className="tile"
+                            className={flashing ? "tile tile-pop" : "tile"}
                             ref={el => (tileRefs.current[idx] = el)}
                             aria-pressed={isSelected}
                             // A locked row's tiles ignore taps (handleTap returns
@@ -835,7 +836,6 @@ export default function ConnectionsOrganizer() {
                               // not React, so it isn't reset on re-render.
                               transform: liftTransform,
                               boxShadow,
-                              animation: flashing ? "lockPop 0.45s ease" : "none",
                             }}
                           >
                             {word}
@@ -1192,7 +1192,6 @@ const styles = {
     whiteSpace: "nowrap",
     fontFamily: "var(--font)",
     fontWeight: 600,
-    transition: "all 0.2s",
   },
   labelInput: {
     flex: 1,
@@ -1203,7 +1202,6 @@ const styles = {
     borderRadius: 7,
     fontFamily: "var(--font)",
     color: "var(--text)",
-    transition: "all 0.2s",
   },
   tileRow: {
     display: "grid",

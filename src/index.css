@@ -176,6 +176,13 @@ body::before {
 }
 .btn:not(:disabled):active { transform: translateY(1px); }
 
+/* The row's category field. Only its colors change (it takes the row's tint
+   once locked), and they live inline in App.jsx — but the transition belongs
+   here so the reduced-motion block can reach it. */
+.label-input {
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
 /* The compact bordered button: Shuffle and the overflow trigger in the board
    header, Retry in the empty state. Sized here rather than inline because the
    narrow-viewport media query further down has to be able to shrink it — an
@@ -490,8 +497,13 @@ textarea:focus-visible {
 }
 
 /* One satisfying pop when a row locks — overshoot then settle for snap.
-   The colored glow flare is layered on via the tile's inline box-shadow while
-   `flashing` is true (see App.jsx), using that row's own glow color. */
+   Attached by className while `flashing` is true (see App.jsx). The pop ends
+   itself at 450ms; the 600ms `setFlashRow(null)` timeout that drops the class
+   is what ends the row's *glow* (the flared box-shadow the tile sets inline
+   while flashing), so shortening that timeout shortens the glow, not the pop. */
+.tile-pop {
+  animation: lockPop 0.45s ease;
+}
 @keyframes lockPop {
   0%   { transform: scale(1); }
   38%  { transform: scale(1.07); }
@@ -501,11 +513,33 @@ textarea:focus-visible {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Reduced motion, opted out one animation at a time rather than with a blanket
+   `*` kill — so anything added later has to decide for itself.
+
+   Dropping each one is lossless. The three entrances (`tileIn`, `noticeIn`,
+   `sheetIn`) use a `both` fill, so the frame they hold is already the natural
+   style; `lockPop` is not an entrance and not filled, but its 0% and 100% are
+   both `scale(1)`, so removing it leaves the tile exactly where it ends up
+   anyway. The four selectors below are every transition in the app — every
+   `transition` declaration lives in this file, so none escapes inline (the
+   lock button carries `className="btn"` and takes `.btn`'s). Nothing waits on
+   `transitionend` either: the swap commit and the lock flash are on
+   setTimeouts in App.jsx.
+
+   The two spinners — `.seg-spin` here and the empty state's inline
+   `styles.spinner` in App.jsx — deliberately keep running. A 9px / 34px
+   rotating ring isn't the large-area, vestibular-trigger motion this query is
+   about, and it is the only signal that a fetch is in flight: with a board on
+   screen, freezing it leaves a reduced-motion user staring at nothing for up
+   to 9 seconds after tapping another day. Don't reinstate the blanket rule. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-  .reveal { animation: none; }
+  .reveal,
+  .notice,
+  .sheet[open],
+  .tile-pop { animation: none; }
+
+  .btn,
+  .tile,
+  .seg,
+  .label-input { transition: none; }
 }
