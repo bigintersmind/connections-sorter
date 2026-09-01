@@ -1089,7 +1089,11 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: 8,
+    // The gap is a floor, not a spacing: space-between pushes the switcher and
+    // the buttons apart at any width with room to spare, so this only bites at
+    // 320px with four segments, where every pixel goes to the switcher (see
+    // the 320px budget under `.segs` in index.css).
+    gap: 6,
     marginBottom: 10,
     paddingTop: 2,
   },

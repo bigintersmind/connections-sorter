@@ -287,10 +287,11 @@ textarea:focus-visible {
   border: 1px solid var(--border);
   border-radius: 999px;
   /* Safety valve, not the plan: the sizes below fit four segments plus both
-     header buttons down to 320px. If a longer weekday or a fallback font ever
-     blows that budget, the pill scrolls rather than colliding with Shuffle or
-     wrapping the header onto two rows. (App.jsx keeps the active segment in
-     view when that happens.) */
+     header buttons down to 320px with about 4px to spare on the widest weekday
+     label ("Wed"; "Fri" leaves ~15px). If a fallback font ever blows that
+     budget, the pill scrolls rather than colliding with Shuffle or wrapping
+     the header onto two rows. (App.jsx keeps the active segment in view when
+     that happens.) */
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -335,11 +336,16 @@ textarea:focus-visible {
 /* iPhone-SE-and-narrower. The header is the one row that can't reflow, so both
    the segments and the two buttons give up a few pixels here; with four
    segments the progress dots go too (the segment's aria-label still announces
-   the locked count, and the fill still says which day you're on). */
+   the locked count, and the fill still says which day you're on). The 320px
+   budget is exact: 300px of content minus the two buttons (96px) and the
+   header gap leaves the pill 198px, and Today / Yesterday / Wed / Custom at
+   11.5px need 194px of it at 4px of side padding with no gap between
+   segments. (Only the pressed segment has a fill, so the gap was never
+   visible; padding 5px overran by up to 9px, depending on the weekday.) */
 @media (max-width: 380px) {
   .seg { padding: 5px 8px; font-size: 12px; }
-  .segs-dense { gap: 1px; }
-  .segs-dense .seg { padding: 5px 5px; font-size: 11.5px; }
+  .segs-dense { gap: 0; }
+  .segs-dense .seg { padding: 5px 4px; font-size: 11.5px; }
   .segs-dense .seg-dot { display: none; }
   .small-btn { padding: 6px 8px; font-size: 12px; }
   .icon-btn { padding: 6px 8px; }
