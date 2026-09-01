@@ -4,8 +4,23 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f1efe5" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#131210" />
+    <meta name="theme-color" content="#f1efe5" />
+    <script>
+      // Apply the saved Appearance preference — or the OS scheme when there is
+      // none — before the first paint, so a dark-mode visitor never sees a
+      // light flash. This inlines the rule from src/theme.js: the key, the
+      // rule and the two colors must match, and src/theme.test.js checks that
+      // they do. App.jsx's useTheme takes over from here.
+      (function () {
+        var pref = null;
+        try { pref = localStorage.getItem('connections-theme'); } catch (e) {}
+        var dark = pref === 'dark' ||
+          (pref !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.content = dark ? '#131210' : '#f1efe5';
+      })();
+    </script>
     <title>Connections Sorter — Scratchpad for the NYT Connections Puzzle</title>
     <meta name="description" content="Today's NYT Connections words load automatically. Group, swap, and lock candidate categories before you commit your guesses. Runs in your browser, no signup." />
     <link rel="canonical" href="https://connections-sorter.com/" />
@@ -35,8 +50,10 @@
     </script>
     <style>
       /* Paint the page background immediately (before the JS-imported
-         stylesheet loads) so there's no white flash, in either theme. */
+         stylesheet loads) so there's no white flash, in either theme. The
+         script above has already stamped data-theme on <html>. */
       body { margin: 0; background: #f1efe5; }
+      :root[data-theme="dark"] body { background: #131210; }
       .seo-fallback {
         max-width: 640px;
         margin: 0 auto;
@@ -48,12 +65,9 @@
       .seo-fallback h1 { font-size: 32px; margin: 0 0 16px; letter-spacing: -0.5px; }
       .seo-fallback p { margin: 0 0 12px; color: #444; }
       .seo-fallback .muted { color: #888; font-size: 14px; margin-top: 24px; }
-      @media (prefers-color-scheme: dark) {
-        body { background: #131210; }
-        .seo-fallback { color: #f2f0e6; }
-        .seo-fallback p { color: #9a978a; }
-        .seo-fallback .muted { color: #6b6859; }
-      }
+      :root[data-theme="dark"] .seo-fallback { color: #f2f0e6; }
+      :root[data-theme="dark"] .seo-fallback p { color: #9a978a; }
+      :root[data-theme="dark"] .seo-fallback .muted { color: #6b6859; }
     </style>
   </head>
   <body>

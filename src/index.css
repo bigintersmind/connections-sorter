@@ -1,9 +1,13 @@
 /* ---------------------------------------------------------------------------
    Theme tokens. Every color in App.jsx's inline `styles` — and in the classes
    further down this file — references one of these custom properties, so the
-   light/dark split lives entirely here: the
-   media query below re-points the same variables and the whole UI follows,
-   with no theme state in React. The four Connections row colors (yellow/green/
+   light/dark split lives entirely here. The dark block is keyed on
+   <html data-theme="dark">, deliberately not on the OS media query: that
+   attribute always holds the *resolved* scheme — the saved Appearance
+   preference, or the OS scheme when there is none. A pre-paint script in
+   index.html stamps it before the first frame and App.jsx's useTheme keeps it
+   current (see src/theme.js), so flipping one attribute flips the whole UI
+   with no per-component state. The four Connections row colors (yellow/green/
    blue/purple) are intentionally NOT themed — they're the puzzle's identity and
    stay constant; their text stays dark because all four are light pastels.
 --------------------------------------------------------------------------- */
@@ -54,50 +58,48 @@
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #131210;
-    --bg-2: #1c1a15;
+:root[data-theme="dark"] {
+  --bg: #131210;
+  --bg-2: #1c1a15;
 
-    --surface: #211f19;
+  --surface: #211f19;
 
-    --tile-bg: #2b2820;
-    --tile-text: #f2f0e6;
-    --tile-border: #393528;
-    --tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 3px 12px rgba(0, 0, 0, 0.35);
+  --tile-bg: #2b2820;
+  --tile-text: #f2f0e6;
+  --tile-border: #393528;
+  --tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 3px 12px rgba(0, 0, 0, 0.35);
 
-    --text: #f2f0e6;
-    --text-soft: #c4c1b4;
-    --text-muted: #9a978a;
-    --text-faint: #807d6f;
+  --text: #f2f0e6;
+  --text-soft: #c4c1b4;
+  --text-muted: #9a978a;
+  --text-faint: #807d6f;
 
-    --border: #322f27;
-    --border-strong: #433f33;
+  --border: #322f27;
+  --border-strong: #433f33;
 
-    --selected-bg: #f2f0e6;
-    --selected-text: #1b1813;
-    --selected-ring: #f2f0e6;
-    /* A heavier drop on dark so the picked-up tile reads as lifted against the
-       near-black board (a soft shadow alone is nearly invisible there). */
-    --selected-shadow: 0 13px 30px rgba(0, 0, 0, 0.62);
+  --selected-bg: #f2f0e6;
+  --selected-text: #1b1813;
+  --selected-ring: #f2f0e6;
+  /* A heavier drop on dark so the picked-up tile reads as lifted against the
+     near-black board (a soft shadow alone is nearly invisible there). */
+  --selected-shadow: 0 13px 30px rgba(0, 0, 0, 0.62);
 
-    --primary: #f2f0e6;
-    --primary-text: #1b1813;
-    --primary-hover: #ffffff;
+  --primary: #f2f0e6;
+  --primary-text: #1b1813;
+  --primary-hover: #ffffff;
 
-    --input-bg: #1b1914;
-    --focus-ring: #f2f0e6;
+  --input-bg: #1b1914;
+  --focus-ring: #f2f0e6;
 
-    --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 18px rgba(0, 0, 0, 0.35);
-    --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.5), 0 16px 34px rgba(0, 0, 0, 0.45);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 18px rgba(0, 0, 0, 0.35);
+  --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.5), 0 16px 34px rgba(0, 0, 0, 0.45);
 
-    --error-bg: #2a1d1a;
-    --error-text: #f0a89e;
+  --error-bg: #2a1d1a;
+  --error-text: #f0a89e;
 
-    --backdrop: rgba(0, 0, 0, 0.62);
+  --backdrop: rgba(0, 0, 0, 0.62);
 
-    color-scheme: dark;
-  }
+  color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -259,12 +261,14 @@ textarea:focus-visible {
    would spill over the group's border — tuck it in. */
 .seg:focus-visible { outline-offset: -1px; }
 
-/* ------------------------------ Day switcher ------------------------------
-   The segmented Today / Yesterday / weekday (/ Custom) control in the board
-   header. Unlike the rest of the app this is styled in CSS rather than inline:
-   it needs a modifier class for the four-segment case (inline styles can't
-   express one, and an inline value would win over it anyway) and it is the one
-   piece of layout that must survive a 320px viewport. */
+/* ------------------------- Segmented controls -----------------------------
+   The Today / Yesterday / weekday (/ Custom) switcher in the board header, and
+   the System / Light / Dark Appearance row in the overflow sheet, which reuses
+   the same classes so the two pills read as one family. Unlike the rest of the
+   app this is styled in CSS rather than inline: it needs a modifier class for
+   the four-segment case (inline styles can't express one, and an inline value
+   would win over it anyway) and the header is the one piece of layout that
+   must survive a 320px viewport. */
 
 .segs {
   display: flex;
@@ -409,7 +413,9 @@ textarea:focus-visible {
   text-decoration: none;
   cursor: pointer;
 }
-.sheet-item + .sheet-item { border-top: 1px solid var(--border); }
+.sheet-item + .sheet-item,
+.sheet-item + .sheet-row,
+.sheet-row + .sheet-item { border-top: 1px solid var(--border); }
 .sheet-item-danger { color: var(--error-text); }
 .sheet-item:disabled { color: var(--text-faint); }
 .sheet-hint {
@@ -419,6 +425,22 @@ textarea:focus-visible {
   font-weight: 500;
   color: var(--text-muted);
 }
+/* A setting rather than an action — a label with a segmented control beside
+   it (Appearance). Not a button: the sheet stays open while it's changed and
+   the board behind it flipping is the feedback. */
+.sheet-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+/* The pill sits on the sheet's own surface here, not the page, so give it
+   the page tone to keep the inset look it has in the header. */
+.sheet-row .segs { background: var(--bg); }
 @media (hover: hover) {
   .sheet-item:not(:disabled):hover { background: var(--bg-2); }
   .sheet-close:hover { color: var(--text); }

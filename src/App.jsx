@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fitTileFont } from "./fitTileFont.js";
 import { SITE_URL, sharePayload } from "./share.js";
+import {
+  THEME_COLORS,
+  THEME_KEY,
+  THEME_OPTIONS,
+  parseThemePreference,
+  resolveTheme,
+  serializeThemePreference,
+} from "./theme.js";
 import { windowDates } from "../shared/puzzleDates.js";
 import {
   CUSTOM_KEY,
@@ -113,6 +121,55 @@ function possessiveDay(key, todayISO) {
   return `${weekday}'s`;
 }
 
+// The Appearance preference. <html data-theme> always holds the *resolved*
+// scheme: the pre-paint script in index.html stamps it before the first frame,
+// and this hook owns it from then on — re-stamping when the preference changes
+// and, while following the system, when the OS flips (sunset with the tab
+// open). The theme-color meta rides along so the browser chrome matches. The
+// rules themselves are in theme.js; this is only the DOM and storage glue.
+const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
+
+function readThemePreference() {
+  try {
+    return parseThemePreference(localStorage.getItem(THEME_KEY));
+  } catch {
+    return "system";
+  }
+}
+
+function useTheme() {
+  const [pref, setPref] = useState(readThemePreference);
+
+  useEffect(() => {
+    const query = window.matchMedia(DARK_SCHEME_QUERY);
+    const apply = () => {
+      const resolved = resolveTheme(pref, query.matches);
+      document.documentElement.dataset.theme = resolved;
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute("content", THEME_COLORS[resolved]);
+    };
+    apply();
+    // Listening even under an override costs nothing and keeps one code path:
+    // resolveTheme ignores the OS unless the preference is "system".
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, [pref]);
+
+  const choose = useCallback((next) => {
+    setPref(next);
+    try {
+      const stored = serializeThemePreference(next);
+      if (stored) localStorage.setItem(THEME_KEY, stored);
+      else localStorage.removeItem(THEME_KEY);
+    } catch {
+      // Storage unavailable: the choice still holds for this visit.
+    }
+  }, []);
+
+  return [pref, choose];
+}
+
 export default function ConnectionsOrganizer() {
   // The save and the launch decision are taken once, at mount — a re-render
   // after ET midnight must not re-decide and yank a board mid-play. (A tab left
@@ -153,6 +210,7 @@ export default function ConnectionsOrganizer() {
   const [manualText, setManualText] = useState("");
   const [manualError, setManualError] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const [themePref, chooseTheme] = useTheme();
   // Outcome of the last "Share this site" tap that ended on the clipboard
   // path: "copied" | "failed" | null. Shown as the item's hint; cleared
   // whenever the sheet closes so the next open starts fresh.
@@ -922,6 +980,25 @@ export default function ConnectionsOrganizer() {
                     : "Copy a link to send to a friend"}
             </span>
           </button>
+          {/* A setting, not an action: the sheet stays open and the board
+              behind it flips at once, which is the feedback. Same
+              aria-pressed pattern as the day switcher. */}
+          <div className="sheet-row">
+            <span id="appearance-label">Appearance</span>
+            <div className="segs" role="group" aria-labelledby="appearance-label">
+              {THEME_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  className="seg"
+                  aria-pressed={themePref === value}
+                  onClick={() => chooseTheme(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
           <a
             className="sheet-item"
             href={OFFICIAL_GAME_URL}
