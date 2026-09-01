@@ -4,6 +4,7 @@ import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  shouldCancelPointerPress,
   toPageRect,
 } from "./dragSwap.js";
 import { SITE_URL, sharePayload } from "./share.js";
@@ -629,15 +630,26 @@ export default function ConnectionsOrganizer() {
 
   // The press ended without a release the tile gets to see. Serves two
   // signals: pointercancel — the system took the pointer away, a pan or an
-  // edge swipe the browser claimed for itself — and window blur, below. No
-  // click follows either, so there's nothing to swallow. Neither fires when
-  // the tile is removed from under a captured pointer; the layout effect on
-  // activeKey/screen above covers that.
+  // edge swipe the browser claimed for itself — which reaches here through
+  // the pointer-id guard below, and window blur, which carries no pointer
+  // event and so cancels unconditionally. No click follows either, so
+  // there's nothing to swallow. Neither fires when the tile is removed from
+  // under a captured pointer; the layout effect on activeKey/screen above
+  // covers that.
   const cancelPress = useCallback(() => {
     if (!dragRef.current) return;
     dragRef.current = null;
     setDrag(null);
   }, []);
+
+  // A refused second contact can still cancel on the tile it landed on (for
+  // example, a locked tile the browser claims for scrolling). It must not end
+  // the first pointer's live press.
+  const handleTilePointerCancel = useCallback((e) => {
+    const press = dragRef.current;
+    if (!press || !shouldCancelPointerPress(press.pointerId, e.pointerId)) return;
+    cancelPress();
+  }, [cancelPress]);
 
   // Window blur is a REQUIRED cancel signal, not a redundant one. A mouse drag
   // interrupted by Alt-Tab or a system dialog is released in another app, and
@@ -1061,7 +1073,7 @@ export default function ConnectionsOrganizer() {
                             onPointerDown={(e) => handleTilePointerDown(idx, e)}
                             onPointerMove={handleTilePointerMove}
                             onPointerUp={handleTilePointerUp}
-                            onPointerCancel={cancelPress}
+                            onPointerCancel={handleTilePointerCancel}
                             style={{
                               ...styles.tile,
                               background: bg,
