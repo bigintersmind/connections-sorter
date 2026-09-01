@@ -630,10 +630,12 @@ export default function ConnectionsOrganizer() {
 
   // The press ended without a release the tile gets to see. Serves two
   // signals: pointercancel — the system took the pointer away, a pan or an
-  // edge swipe the browser claimed for itself — and window blur, below. No
-  // click follows either, so there's nothing to swallow. Neither fires when
-  // the tile is removed from under a captured pointer; the layout effect on
-  // activeKey/screen above covers that.
+  // edge swipe the browser claimed for itself — which reaches here through
+  // the pointer-id guard below, and window blur, which carries no pointer
+  // event and so cancels unconditionally. No click follows either, so
+  // there's nothing to swallow. Neither fires when the tile is removed from
+  // under a captured pointer; the layout effect on activeKey/screen above
+  // covers that.
   const cancelPress = useCallback(() => {
     if (!dragRef.current) return;
     dragRef.current = null;
