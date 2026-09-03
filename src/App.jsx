@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fitTileFonts } from "./fitTileFont.js";
 import {
+  ArrowUpIcon,
+  CheckIcon,
+  CircleIcon,
+  CloseIcon,
+  ExternalIcon,
+  MoreIcon,
+} from "./icons.jsx";
+import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
@@ -885,7 +893,7 @@ export default function ConnectionsOrganizer() {
               aria-haspopup="dialog"
               aria-expanded={overflowOpen}
             >
-              ⋯
+              <MoreIcon />
             </button>
           </div>
         </div>
@@ -912,7 +920,7 @@ export default function ConnectionsOrganizer() {
               onClick={() => setLoadError(null)}
               aria-label="Dismiss"
             >
-              ✕
+              <CloseIcon />
             </button>
           </div>
         )}
@@ -944,9 +952,13 @@ export default function ConnectionsOrganizer() {
                       aria-label={`Lock ${color.name} row`}
                       onClick={() => toggleLock(rowIdx)}
                     >
-                      {/* The glyph restates aria-pressed, so hide it and leave
-                          the color as the button's whole accessible name. */}
-                      <span aria-hidden="true">{locked ? "✓ " : "○ "}</span>
+                      {/* The icon restates aria-pressed, so it stays hidden
+                          and the color is the button's whole accessible name. */}
+                      {locked ? (
+                        <CheckIcon className="icon-before" />
+                      ) : (
+                        <CircleIcon className="icon-before" />
+                      )}
                       {color.name}
                     </button>
                     <input
@@ -1161,7 +1173,8 @@ export default function ConnectionsOrganizer() {
             <>
               {/* The arrow points at the picked-up tile on screen; spoken, it
                   would just prefix the sentence with "up arrow". */}
-              <span aria-hidden="true">↑ </span>Tap another tile to swap
+              <ArrowUpIcon className="icon-before" />
+              Tap another tile to swap
             </>
           ) : (
             "Tap a tile to select, then another to swap"
@@ -1179,7 +1192,8 @@ export default function ConnectionsOrganizer() {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Play the official game ↗
+          Play the official game
+          <ExternalIcon className="icon-after" />
         </a>
       </footer>
 
@@ -1247,7 +1261,8 @@ export default function ConnectionsOrganizer() {
             rel="noopener noreferrer"
             onClick={closeOverflow}
           >
-            Play the official game ↗
+            Play the official game
+            <ExternalIcon className="icon-after" />
           </a>
           {/* Destructive, so it comes last and in its own group: a visible band
               rather than another hairline, which also keeps a thumb aimed at

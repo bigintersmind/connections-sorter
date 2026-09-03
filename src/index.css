@@ -206,6 +206,19 @@ body::before {
 }
 .small-btn:disabled { color: var(--text-faint); }
 .icon-btn { padding: 7px 10px; font-size: 15px; font-weight: 700; line-height: 1; }
+/* The inline SVG icons (src/icons.jsx). Sized in em so each takes the size
+   of the text it sits in, and sunk 0.125em under the baseline so the 1em box
+   centres on the x-height the way a glyph would. The two modifiers carry the
+   gap the old text characters had as a literal space. */
+.icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  flex: none;
+}
+.icon-before { margin-right: 0.3em; }
+.icon-after { margin-left: 0.3em; }
 @media (hover: hover) {
   .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
   .btn-secondary:not(:disabled):hover { border-color: var(--border-strong); }
