@@ -75,6 +75,10 @@ typography:
     fontFamily: "'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium', 'Helvetica Neue', Arial, sans-serif"
     fontSize: "13px"
     fontWeight: 600
+  label-regular:
+    fontFamily: "'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium', 'Helvetica Neue', Arial, sans-serif"
+    fontSize: "13px"
+    fontWeight: 400
   caption:
     fontFamily: "'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium', 'Helvetica Neue', Arial, sans-serif"
     fontSize: "12px"
@@ -125,7 +129,7 @@ components:
     rounded: "{rounded.sm}"
   button-ghost:
     textColor: "{colors.text-muted}"
-    typography: "{typography.label}"
+    typography: "{typography.label-regular}"
     padding: "4px 6px"
     size: "32px"
   button-primary:
@@ -149,7 +153,7 @@ components:
   input-label:
     backgroundColor: "{colors.input-bg}"
     textColor: "{colors.text}"
-    typography: "{typography.label}"
+    typography: "{typography.label-regular}"
     rounded: "{rounded.sm}"
     padding: "6px 10px"
     height: "30px"
@@ -159,7 +163,7 @@ components:
   notice:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text-soft}"
-    typography: "{typography.label}"
+    typography: "{typography.label-regular}"
     rounded: "{rounded.md}"
     padding: "6px 12px"
 ---
@@ -204,7 +208,7 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 ### Named Rules
 **The Token Rule.** Every colour in the app is a `var(--token)` with a light and a dark value. The only hex literals in `App.jsx` are the four pastels and their text, and the only ones in `index.html` are copies of `--bg` and the three text tokens that the pre-paint fallback needs before the stylesheet loads — `src/theme.test.js` pins every copy to its token.
 
-**The Faint Rule.** `--text-faint` is below 4.5:1 in both schemes, so it is decoration and disabled states only: the saved-day dot, a disabled chip, a hover edge. Running text, hints, placeholders and the footer stop at `--text-muted`.
+**The Faint Rule.** `--text-faint` is below 4.5:1 everywhere in light and on `--surface` in dark, and only just clears the line on the dark page (4.53:1), so it is decoration and disabled states only: the saved-day dot, a disabled chip, a hover edge. Running text, hints, placeholders and the footer stop at `--text-muted`.
 
 **The Pastels Are Not Yours Rule.** Yellow, green, blue and purple mean "this row is locked." They are not available as accents, badges or highlights, and they do not change with the theme.
 
@@ -218,15 +222,15 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 - **Title** (800, `--fs-xl` 20 px, letter-spacing −0.6 px): "Enter 16 Words" on the manual screen. The board has no title row at all; its name lives in a visually hidden heading.
 - **Headline** (800, 17 px, letter-spacing −0.3 px): the "How this works" dialog heading — deliberately between `--fs-lg` and `--fs-xl`, because 15 reads as a row and 20 as a page title.
 - **Body** (400, `--fs-md` 14 px, line-height 1.5): the explainer list, the empty-state message, the textarea, and the sheet's "Cancel" row at 600.
-- **Label** (600, `--fs-sm` 13 px): the working size — Shuffle and the overflow trigger, the category-label inputs, the board hint, the notice bar, the manual subtitle (500), the error box, the "how this works" note. The three ghost buttons use it at 700 for Retry and 400 for the rest.
-- **Caption** (500, `--fs-xs` 12 px, line-height 1.5): the footer and the sheet's hint lines; the lock chips use the same size at 600, rising to 800 when locked.
-- **Tile** (700, uppercase, letter-spacing 0.3 px, line-height 1.15): the sixteen words. The size is not a token — `src/fitTileFont.js` measures each word on a canvas and sets 8–20 px per tile so multi-word entries wrap at spaces and a single long word shrinks rather than breaking. On a 390 px phone every tile is 14 px; a 500 px board gets 18.
-- **Sheet rows** (600, `--fs-lg` 15 px): every action in the overflow sheet and the Appearance row; the same size at 700 is the manual screen's two buttons.
+- **Label** (600, `--fs-sm` 13 px): the working size — Shuffle, the category-label inputs (400), the board hint (400), the notice bar (400), the manual subtitle (500), the error box, the "how this works" note. The three ghost buttons use it at 700 for Retry and 400 for the rest.
+- **Caption** (`--fs-xs` 12 px): the sheet's hint lines at 500 and the footer at 400 with line-height 1.5; the lock chips use the same size at 600, rising to 800 when locked.
+- **Tile** (700, uppercase, letter-spacing 0.3 px, line-height 1.15): the sixteen words. The size is not a token — `src/fitTileFont.js` measures each word on a canvas and sets 8–20 px per tile so multi-word entries wrap at spaces and a single long word shrinks rather than breaking. On a 390 px phone every tile is 14 px; a 500 px board gets 18.5.
+- **Sheet rows** (600, `--fs-lg` 15 px): every action in the overflow sheet and the Appearance row; the manual screen's two buttons take the same size at 700 (Primary) and 600 (Secondary).
 
 ### Named Rules
-**The Five Steps Rule.** Type sizes are `--fs-xs` 12, `--fs-sm` 13, `--fs-md` 14, `--fs-lg` 15 and `--fs-xl` 20. The deliberate literals are the tile word (measured), the day switcher's 13 / 12 / 11.5 px segments (a 320 px budget tuned to the half-pixel in #15 — retune all of them together or not at all), and the 17 px dialog heading. Anything new picks a step.
+**The Five Steps Rule.** Type sizes are `--fs-xs` 12, `--fs-sm` 13, `--fs-md` 14, `--fs-lg` 15 and `--fs-xl` 20. The deliberate literals — pills and circles aside, which are `999px` and `50%` by definition — are the tile word (measured), the day switcher's 13 / 12 / 11.5 px segments (a 320 px budget tuned to the half-pixel in #15 — retune all of them together or not at all), and the 17 px dialog heading. Anything new picks a step.
 
-**The Weight Carries the Verb Rule.** If you can tap it, it is 600 or heavier; if you only read it, it is 500 or lighter. The lock chip going from 600 to 800 is the whole visual of "locked."
+**The Weight Carries the Verb Rule.** If it reads as a *button*, it is 600 or heavier; if you only read it, it is 500 or lighter. The ghost buttons are the deliberate quiet exception (400, bar Retry's 700), and links and fields are not buttons — the footer link and the category-label inputs stay at 400 too. The lock chip going from 600 to 800 is the whole visual of "locked."
 
 ## Layout
 
@@ -274,7 +278,7 @@ The chip is a 30 px-floor button at `--fs-xs` 600, `7px 10px`, `--r-sm`, `line-h
 A `--surface` pill with a `--border` hairline, 2 px of padding and 2 px between segments; each segment is a 30 px-floor pill at 13 px 600 in `--text-muted`, the pressed one filled `--selected-bg` with `--selected-text`. A day with a saved board shows a 5 px `--text-faint` dot; a day being fetched shows a 9 px spinner in the same slot so nothing shifts. The same classes build the System / Light / Dark row in the sheet, where the pill takes `--bg` so it stays inset against the sheet's surface.
 
 ### Small buttons
-Shuffle, the overflow trigger and the empty state's Retry: `--surface` with a `--border-strong` edge, `--r-sm`, `7px 12px` on a 36 px floor (the switcher pill's height, so the header reads as one row), `--fs-sm` 600. The icon variant is `7px 10px` at `--fs-lg` 700 with `line-height: 1`. Hover (pointer devices only) tints the fill to `--bg-2` and darkens the edge to `--text-faint`; press nudges `translateY(1px)`; disabled greys the text to `--text-faint`.
+Shuffle, the overflow trigger and the empty state's Retry: `--surface` with a `--border-strong` edge, `--r-sm`, `7px 12px` on a 36 px floor (the switcher pill's height, so the header reads as one row), `--fs-sm` 600. The icon variant is `7px 10px` at `--fs-lg` with `line-height: 1`. Hover (pointer devices only) tints the fill to `--bg-2` and darkens the edge to `--text-faint`; press nudges `translateY(1px)`; disabled greys the text to `--text-faint`.
 
 ### Ghost buttons
 The notice's Retry and dismiss, and the empty state's "or enter the words yourself": no border, no fill, an invisible `32 × 32` target box, `--fs-sm` in `--text-muted`, `4px 6px`. Modifiers: `-link` underlines; `-action` (Retry) goes to 700 in `--text`, underlined, no-wrap; `-end` pushes to the far end of the bar. Hover turns the text to `--text`; disabled fades to 50 %.

@@ -16,10 +16,11 @@
     'Helvetica Neue', Arial, sans-serif;
 
   /* The scale. Not themed, so defined once. Five type steps and three radii
-     cover the UI; the exceptions are deliberate and commented where they
-     sit: the tile word (measured by fitTileFont.js), the day switcher's
-     segments (fitted to a 320px header in #15), the sheet's 18px top
-     corners and the "how this works" heading. */
+     cover the UI — pills (999px) and circles (50%) aside; the remaining
+     exceptions are deliberate and commented where they sit: the tile word
+     (measured by fitTileFont.js), the day switcher's segments (fitted to a
+     320px header in #15), the sheet's 18px top corners and the "how this
+     works" heading. */
   --fs-xs: 12px;
   --fs-sm: 13px;
   --fs-md: 14px;
@@ -29,9 +30,13 @@
   --r-md: 12px;
   --r-lg: 16px;
 
-  /* Hand-copied in four places that can't read this file: the theme-color
-     meta, the pre-paint script and the fallback <style> in index.html, and
-     THEME_COLORS in src/theme.js. theme.test.js pins every copy to these. */
+  /* The page pair. --bg is hand-copied in four places that can't read this
+     file: the theme-color meta, the pre-paint script and the fallback <style>
+     in index.html, and THEME_COLORS in src/theme.js — and that fallback also
+     mirrors --text, --text-soft and --text-muted, while DESIGN.md's
+     frontmatter mirrors the whole palette. (--bg-2 is copied nowhere; it sits
+     here because the two are the page's pair.) theme.test.js pins every copy
+     to these. */
   --bg: #f1efe5;
   --bg-2: #faf8f1;
 
@@ -45,14 +50,16 @@
   --text: #1b1813;
   --text-soft: #565347;
   --text-muted: #6c695b;
-  /* Decoration and disabled states only — below 4.5:1, never running text. */
+  /* Below 4.5:1 everywhere in light and on --surface in dark, and only just
+     over the line on the dark page (4.53:1) — so decoration and disabled
+     states only, never running text. */
   --text-faint: #918d7c;
 
   --border: #e6e2d5;
   --border-strong: #d6d1c1;
   /* The boundary of a field you can type in, at 3:1 against both the page and
-     the field's own fill (WCAG 1.4.11) — `--border` is decoration and can't
-     carry a control's edge. */
+     the field's own fill (WCAG 1.4.11) — `--border` and `--border-strong` are
+     hairlines and bordered-button edges, never a field's. */
   --input-border: #8a8677;
 
   --selected-bg: #29251e;
@@ -230,7 +237,7 @@ body::before {
   cursor: pointer;
 }
 .small-btn:disabled { color: var(--text-faint); }
-.icon-btn { padding: 7px 10px; font-size: var(--fs-lg); font-weight: 700; line-height: 1; }
+.icon-btn { padding: 7px 10px; font-size: var(--fs-lg); line-height: 1; }
 /* The inline SVG icons (src/icons.jsx). Sized in em so each takes the size
    of the text it sits in, and sunk 0.125em under the baseline so the 1em box
    centres on the x-height the way a glyph would. The two modifiers carry the
@@ -244,10 +251,12 @@ body::before {
 }
 .icon-before { margin-right: 0.3em; }
 .icon-after { margin-left: 0.3em; }
-/* The manual screen's Use-these-words / Back pair. Only their colors are
+/* The manual screen's Load-Puzzle / Back pair. Only their colors are
    here (layout is inline in App.jsx's styles.btnPrimary / btnSecondary),
-   because a background set inline would outrank the :hover rules below —
-   which is exactly how both hovers used to change nothing. */
+   because an inline `background` *or* `border` outranks the :hover rules
+   below — which is exactly how both hovers used to change nothing: the
+   primary's inline fill hid its hover, and Back's inline `border` shorthand
+   outranked the edge its hover set. */
 .btn-primary {
   background: var(--primary);
   color: var(--primary-text);
@@ -262,7 +271,8 @@ body::before {
   .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
   /* Shuffle, the overflow trigger, Retry and Back all rest on --border-strong,
      so the old hover re-set the border they already had and nothing moved
-     (Back's inline background hid the rule entirely — see .btn-secondary).
+     (and Back's inline `border` shorthand outranked the rule outright — see
+     .btn-secondary).
      Tint the fill and darken the edge instead — --text-faint is allowed here
      because a hover border is decoration, not text or a state. */
   .btn-secondary:not(:disabled):hover,
@@ -329,7 +339,7 @@ button:disabled { cursor: not-allowed; }
 /* The borderless buttons — the notice's Retry and dismiss, the empty state's
    "enter the words yourself". One treatment with three small modifiers rather
    than three inline style objects. The box carries the WCAG 2.5.8 target size
-   while the glyph keeps its light weight: with no border or fill to draw, the
+   while the label keeps its light weight: with no border or fill to draw, the
    larger hit area is invisible. */
 .ghost-btn {
   display: inline-grid;

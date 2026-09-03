@@ -950,8 +950,8 @@ export default function ConnectionsOrganizer() {
                       aria-label={`Lock ${color.name} row`}
                       onClick={() => toggleLock(rowIdx)}
                     >
-                      {/* The icon restates aria-pressed, so it stays hidden
-                          and the color is the button's whole accessible name. */}
+                      {/* The icon restates aria-pressed, and the aria-label
+                          above already names the row, so it stays hidden. */}
                       {locked ? (
                         <CheckIcon className="icon-before" />
                       ) : (
@@ -1168,8 +1168,9 @@ export default function ConnectionsOrganizer() {
             ""
           ) : selected !== null ? (
             <>
-              {/* The arrow points at the picked-up tile on screen; spoken, it
-                  would just prefix the sentence with "up arrow". */}
+              {/* The arrow points up at the picked-up tile on screen and is
+                  decoration only — the sentence reads the same without it, so
+                  it stays hidden. */}
               <ArrowUpIcon className="icon-before" />
               Tap another tile to swap
             </>
@@ -1565,9 +1566,10 @@ const styles = {
     marginTop: 12,
   },
   // The manual screen's two buttons. Their colors — fill, text, edge — live in
-  // index.css (.btn-primary / .btn-secondary), not here: an inline background
-  // outranks the class's :hover rule, which is how both hovers came to change
-  // nothing. Layout stays inline.
+  // index.css (.btn-primary / .btn-secondary), not here: an inline `background`
+  // or `border` outranks the class's :hover rule (the primary's fill and Back's
+  // edge both did), which is how both hovers came to change nothing. Layout
+  // stays inline.
   btnPrimary: {
     flex: 1,
     padding: "13px 20px",

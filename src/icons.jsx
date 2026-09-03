@@ -21,16 +21,21 @@ const STROKE = {
   strokeLinejoin: "round",
 };
 
+// `{...rest}` goes FIRST so a caller's props can't clobber the fixed ones:
+// `aria-hidden` and `focusable` are the accessibility contract above, not a
+// default to be overridden, and the geometry is what makes every icon the same
+// 1em drawing. `className` is destructured out of `rest`, so it still merges
+// with `.icon` rather than replacing it.
 function Icon({ className = "", children, ...rest }) {
   return (
     <svg
+      {...rest}
       className={`icon ${className}`.trim()}
       viewBox="0 0 16 16"
       width="1em"
       height="1em"
       aria-hidden="true"
       focusable="false"
-      {...rest}
     >
       {children}
     </svg>
