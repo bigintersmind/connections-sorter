@@ -18,6 +18,14 @@
 // finger's natural jitter without making a deliberate drag feel sticky.
 export const DRAG_THRESHOLD_PX = 7;
 
+// The two scales a drag puts on screen, shared by the live drag (App.jsx's
+// liftTransform) and by the settle seeds below so the two can't drift apart.
+// They're a matched pair: the carried tile rides at 1.04 under the finger and
+// the tile it's over swells to 1.06, so the target's 3px ring stays visible
+// around the tile landing on it. Swap them round and the ring disappears.
+export const DRAG_LIFT_SCALE = 1.04;
+export const DROP_TARGET_SCALE = 1.06;
+
 // A DOMRect is viewport-relative and goes stale the moment the page scrolls;
 // page coordinates don't. Takes the four edges rather than a DOMRect so it can
 // be called with a plain object in a test.
@@ -75,4 +83,35 @@ export function dropTargetIndex(rects, x, y, from, lockedRows) {
   const over = tileIndexAt(rects, x, y);
   if (over === null || over === from) return null;
   return isTileInPlay(over, lockedRows) ? over : null;
+}
+
+// The two tiles a committed drop leaves in flight, expressed as the transforms
+// they need on the FIRST frame after the swap so that frame is a pure re-seat:
+// nothing moves, the carried word is still under the finger. Tile identity is
+// positional (key={idx}), so the swap hands the element at `over` the word the
+// player was carrying and the element at `from` the word that was sitting on
+// the target — each has to start where its new word visually was on the last
+// held frame, and only then be let go so .tile's transform transition (0.15s,
+// index.css) carries it to rest. That's the FLIP: seed, unseed, transition.
+//
+// `rects` is the same page-coordinate measurement the drag took on its first
+// move, so this costs no layout; dx/dy are how far the pointer travelled from
+// the press, read off the release event rather than the last rendered frame.
+export function settleTransforms(rects, from, over, dx, dy) {
+  const source = rects[from];
+  const target = rects[over];
+  return {
+    // The element at `over` now carries the dragged word: put it back exactly
+    // where the carried tile was — its own cell, offset by the gap between the
+    // two cells and by the pointer's travel — at the carried scale.
+    arriving:
+      `translate(${source.left - target.left + dx}px, ${source.top - target.top + dy}px)` +
+      ` scale(${DRAG_LIFT_SCALE})`,
+    // The element at `from` now carries the displaced word: put it back on the
+    // drop target's cell, at the scale the drop target was holding. No dx/dy —
+    // that tile never followed the pointer.
+    displaced:
+      `translate(${target.left - source.left}px, ${target.top - source.top}px)` +
+      ` scale(${DROP_TARGET_SCALE})`,
+  };
 }

@@ -334,6 +334,38 @@ body::before {
   position: relative;
   z-index: 2;
 }
+/* The settle, once a drop has committed. Positional tile identity means the
+   swap hands each of the two elements the other's word, so both are seeded for
+   one frame at the position that word held on the last frame of the drag
+   (settleTransforms in dragSwap.js) and then let go — .tile's transform
+   transition carries the dropped word the last few px into its new cell and
+   slides the displaced one across into the vacated one.
+
+   Only the seed frame turns the transition off, which is why that is a class
+   of its own: it has to be gone before the tiles are released, while the lift
+   below has to outlast the whole glide. */
+.tile-seeded {
+  transition: none;
+}
+/* Both tiles are travelling, so both ride above the board — and, as with the
+   carried tile, that takes lifting the CELL and not just the tile: `.reveal`'s
+   `both`-filled entrance leaves every cell with a stacking context of its own,
+   so a z-index inside one only sorts against that cell. */
+.tile-settling {
+  position: relative;
+  z-index: 2;
+}
+.reveal:has(.tile-settling) {
+  position: relative;
+  z-index: 2;
+}
+/* Their paths cross, and the tile the player dropped is the one they're
+   watching, so it goes over the tile it displaced — whichever way round the
+   two sit in DOM order. Same specificity as the rule above, so it has to come
+   after it. */
+.reveal:has(.tile-arriving) {
+  z-index: 3;
+}
 
 button:disabled { cursor: not-allowed; }
 /* The borderless buttons — the notice's Retry and dismiss, the empty state's
@@ -673,12 +705,19 @@ textarea:focus-visible {
    anyway. The four selectors below are every transition in the app that has
    anything to drop — every `transition` declaration lives in this file, so
    none escapes inline (the lock button carries `className="btn"` and takes
-   `.btn`'s), and the only one not listed is `.tile-dragging`, which already
-   sets `transition: none` for everyone so a carried tile can keep up with the
-   pointer. Nothing waits on `transitionend` either: the swap commit and the
-   lock flash are on setTimeouts in App.jsx. A drag itself isn't animation —
-   it's the pointer's own motion, under the user's hand frame by frame — so it
-   has nothing to opt out of.
+   `.btn`'s), and the only two not listed are `.tile-dragging` and
+   `.tile-seeded`, which already set `transition: none` for everyone — the
+   first so a carried tile can keep up with the pointer, the second so the
+   frame that re-seats a dropped swap doesn't animate. What follows that frame
+   IS a transition, `.tile`'s own, and it is dropped here with the rest; App.jsx
+   goes one step further and doesn't seed a swap at all under this preference,
+   since with the transition off the drop's own frame already lands both tiles
+   at rest in their new cells — the outcome of the whole animation, arriving
+   at once. Nothing waits on `transitionend` either: the swap commit, the lock
+   flash and the settle's teardown are on setTimeouts in App.jsx, and its
+   unseed is a requestAnimationFrame. A drag itself isn't animation — it's the
+   pointer's own motion, under the user's hand frame by frame — so it has
+   nothing to opt out of.
 
    The two spinners — `.seg-spin` here and the empty state's inline
    `styles.spinner` in App.jsx — deliberately keep running. A 9px / 34px

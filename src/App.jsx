@@ -9,9 +9,12 @@ import {
   MoreIcon,
 } from "./icons.jsx";
 import {
+  DRAG_LIFT_SCALE,
+  DROP_TARGET_SCALE,
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  settleTransforms,
   shouldCancelPointerPress,
   toPageRect,
 } from "./dragSwap.js";
@@ -57,6 +60,13 @@ const OFFICIAL_GAME_URL = "https://www.nytimes.com/games/connections";
 const SUPERSEDED = "superseded";
 
 const FETCH_TIMEOUT_MS = 9000;
+
+// How long the two tiles of a dropped swap stay lifted and settling. Past the
+// longest transition .tile runs in index.css — the 0.3s box-shadow, which
+// fades the carried tile's drop and the target's ring — so the lift is only
+// ever taken away once nothing of the glide is still painting; the transform
+// itself is home by 0.15s.
+const SETTLE_MS = 320;
 
 // Phones, and Safari and Chrome on macOS, have a native share sheet; Firefox
 // and Chrome on Linux don't, and get the clipboard instead. Decided once —
@@ -230,6 +240,18 @@ export default function ConnectionsOrganizer() {
   // render — pointer id, press origin, the measured tile boxes — lives in
   // dragRef instead.
   const [drag, setDrag] = useState(null);
+  // The settle after a committed drop, or null. The swap is already in the
+  // store by the time this is set — this is only what the two tiles LOOK like
+  // on the way to their new cells. { from, over, seeds, seeded }: the two
+  // indices that traded, the pair of transforms from settleTransforms, and
+  // which of the two phases is on screen.
+  //
+  // Phase one (seeded) renders both tiles at the seeds, wearing the looks they
+  // had on the last held frame, with the transition off — the commit frame is
+  // then a pure re-seat and nothing moves. Phase two drops both, and .tile's
+  // transitions carry each tile to rest; the tiles keep only their lift so
+  // they ride above the neighbours they cross. Then this clears to null.
+  const [settle, setSettle] = useState(null);
   const [manualText, setManualText] = useState("");
   const [manualError, setManualError] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
@@ -248,6 +270,10 @@ export default function ConnectionsOrganizer() {
   const dragRef = useRef(null);
   // Set for one task after a drag ends, to swallow the click that follows it.
   const suppressClickRef = useRef(false);
+  // The settle's two pending callbacks — the frame that unseeds it and the
+  // timeout that ends it — so both can be called off if the board goes away
+  // under them.
+  const settleTimersRef = useRef({ raf: 0, timeout: 0 });
   const tileRefs = useRef([]);
   const gridRef = useRef(null);
   const segsRef = useRef(null);
@@ -357,6 +383,15 @@ export default function ConnectionsOrganizer() {
     else if (a.right > s.right) segs.scrollLeft += a.right - s.right;
   }, [activeKey]);
 
+  // Call off whatever the settle still has pending. Cheap to call when there
+  // is nothing scheduled: both ids start at 0, which cancelAnimationFrame and
+  // clearTimeout ignore.
+  const clearSettleTimers = useCallback(() => {
+    cancelAnimationFrame(settleTimersRef.current.raf);
+    clearTimeout(settleTimersRef.current.timeout);
+    settleTimersRef.current = { raf: 0, timeout: 0 };
+  }, []);
+
   // A press doesn't outlive the grid it was measured against. The grid is
   // keyed on activeKey and isn't rendered at all on the manual-entry screen,
   // so a fetch landing mid-drag (or a switch away) remounts every tile under
@@ -368,10 +403,15 @@ export default function ConnectionsOrganizer() {
   // a tile as carried, and left alone those would paint the NEW tile at that
   // index translated, ringed and showing the other day's word until the next
   // press. A layout effect so the stale transform never reaches the screen.
+  // A settle in flight goes the same way and for the same reason: its seeds
+  // are inline transforms measured against the OLD board, and the tile that
+  // takes that index on the new one would wear them.
   useLayoutEffect(() => () => {
     dragRef.current = null;
     setDrag(null);
-  }, [activeKey, screen]);
+    clearSettleTimers();
+    setSettle(null);
+  }, [activeKey, screen, clearSettleTimers]);
 
   // Cancel an in-flight load so a slow request can't complete later and yank
   // the player onto a day they've since navigated away from.
@@ -588,8 +628,15 @@ export default function ConnectionsOrganizer() {
       // stays quiet for the same reason — so re-reading per move would only
       // buy a forced layout a frame. Page coordinates (see toPageRect) so a
       // scroll partway through can't desync them.
+      //
+      // The box read is the CELL's (the .reveal around the tile — the same
+      // box, since the tile fills it border-box), never the tile's: a tile
+      // can be mid-transform when this runs — the :active scale of the press
+      // itself, a hover lift, or the settle of a drop 100ms ago still gliding
+      // across the board — and a rect read through that would put the tile
+      // somewhere it isn't and land a later drop on the wrong index.
       press.rects = tileRefs.current.map((el) =>
-        el ? toPageRect(el.getBoundingClientRect(), window.scrollX, window.scrollY) : null,
+        el ? toPageRect(el.parentElement.getBoundingClientRect(), window.scrollX, window.scrollY) : null,
       );
     }
     setDrag({
@@ -616,25 +663,80 @@ export default function ConnectionsOrganizer() {
     suppressClickRef.current = true;
     setTimeout(() => { suppressClickRef.current = false; }, 0);
 
-    const over = dropTargetIndex(
-      press.rects,
-      e.clientX + window.scrollX,
-      e.clientY + window.scrollY,
-      press.from,
-      lockedRows,
-    );
+    const x = e.clientX + window.scrollX;
+    const y = e.clientY + window.scrollY;
+    const over = dropTargetIndex(press.rects, x, y, press.from, lockedRows);
     // Released on nothing that can take it — off the board, back on the tile
     // it came from, on a locked row, or with its own row locked under it
     // while it was in the air. The tile returns to its place; no swap, and a
     // tile picked up earlier by tap stays picked up.
     if (over === null) return;
     commitSwap(press.from, over, press.key);
+    // Seed the settle in the SAME handler as the swap, so React batches the
+    // two into one commit: the frame that swaps the words is the frame that
+    // puts each tile back where its new word already was, and the player sees
+    // nothing move. The pointer's travel comes off this event rather than off
+    // `drag`, which can be a frame behind the finger.
+    //
+    // Only when the swap will actually land: commitSwap drops it when the
+    // player has changed days under the drag (its updater checks s.active),
+    // and a settle for a swap that never happened would slide the wrong words
+    // about. Belt-and-braces in practice — a day change remounts the grid and
+    // the [activeKey, screen] layout effect has already thrown the press away.
+    //
+    // And not under reduced motion. index.css turns .tile's transition off
+    // there, so a seed would have nothing to ease from: this commit already
+    // lands both tiles at rest in their new cells with the right words, which
+    // is what that preference asks for, and seeding would only hold the held
+    // picture on screen for one frame more.
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (press.key === activeKey && !reduceMotion) {
+      setSettle({
+        from: press.from,
+        over,
+        seeds: settleTransforms(press.rects, press.from, over, x - press.startX, y - press.startY),
+        seeded: true,
+      });
+    }
     // The drag wins over a pending tap. A tile selected by tap and then left
     // alone while a different pair was dragged is a stale pick-up: the board
     // under it has changed, so clear it rather than let the next tap swap
     // against a position the player didn't choose.
     setSelected(null);
-  }, [lockedRows, commitSwap]);
+  }, [lockedRows, commitSwap, activeKey]);
+
+  // Run the settle: unseed on the next frame, then end it.
+  //
+  // The requestAnimationFrame is what makes the seeds a real starting point
+  // rather than a value the browser never saw. React flushes an update made
+  // from a frame callback in a later task — after the seeded frame has been
+  // through style and paint — so when the seeds come off, the transition's
+  // before-change style is the seed and .tile's `transform 0.15s` has
+  // somewhere to travel from. (If a browser ever flushed it sooner, the tiles
+  // would snap; the fix would be to force the seeded style into being with a
+  // getBoundingClientRect() on one of the two tiles before unseeding.)
+  //
+  // A press landing during the settle simply wins — the settle is cosmetic,
+  // the store is already right, and the rects a new drag measures are the
+  // cells', which a gliding tile doesn't move (handleTilePointerMove). What
+  // the glide can do is take the press: the displaced tile is lifted while it
+  // crosses cells, so a pointerdown on one of them lands on it rather than on
+  // the tile underneath. A stray pick-up inside 150ms of a release, not a
+  // store write — #24 tracks it.
+  useLayoutEffect(() => {
+    if (!settle) return undefined;
+    if (settle.seeded) {
+      settleTimersRef.current.raf = requestAnimationFrame(() => {
+        // Guarded on identity: the cleanup below cancels this frame whenever
+        // `settle` changes, so a newer seed can't be unseeded early by an
+        // older frame — but say so in the updater rather than rely on it.
+        setSettle((s) => (s === settle ? { ...s, seeded: false } : s));
+      });
+    } else {
+      settleTimersRef.current.timeout = setTimeout(() => setSettle(null), SETTLE_MS);
+    }
+    return clearSettleTimers;
+  }, [settle, clearSettleTimers]);
 
   // The press ended without a release the tile gets to see. Serves two
   // signals: pointercancel — the system took the pointer away, a pan or an
@@ -983,6 +1085,14 @@ export default function ConnectionsOrganizer() {
                       const isSwapping = swapAnim && (swapAnim.a === idx || swapAnim.b === idx);
                       const isDragging = drag?.from === idx;
                       const isDropTarget = drag?.over === idx;
+                      // The two tiles of a dropped swap, on their way to their
+                      // new cells: the one that took the carried word and the
+                      // one that took the target's. `isSeeded` is true only for
+                      // the single re-seat frame that starts the glide.
+                      const isArriving = settle?.over === idx;
+                      const isDisplaced = settle?.from === idx;
+                      const isSettling = isArriving || isDisplaced;
+                      const isSeeded = isSettling && settle.seeded;
                       const word = tiles[idx] || "";
                       // Cascade the entrance top-left → bottom-right, capped so the
                       // last tile doesn't lag noticeably behind the first.
@@ -994,7 +1104,11 @@ export default function ConnectionsOrganizer() {
                       // is — the fill a tap gives, on a ring of its own (below).
                       // A drop target keeps its resting fill and takes only a
                       // ring, so it reads as "here", not as a second thing
-                      // selected. Colors flow through CSS
+                      // selected. The settle's seed frame borrows both: for
+                      // the one re-seat frame after a drop, each of the two
+                      // tiles wears the look the tile whose word it just took
+                      // was wearing, so that frame changes nothing on screen.
+                      // Colors flow through CSS
                       // vars so the board tracks the light/dark theme
                       // automatically.
                       let bg, fg, borderColor, boxShadow;
@@ -1005,7 +1119,16 @@ export default function ConnectionsOrganizer() {
                         boxShadow = flashing
                           ? `0 0 0 1px ${color.bg}, 0 8px 26px ${color.glow}, 0 0 32px ${color.glow}`
                           : `0 2px 8px ${color.glow}`;
-                      } else if (isDragging) {
+                      } else if (isDragging || (isSeeded && isArriving)) {
+                        // The seed frame wears the last held frame's looks as
+                        // well as its positions: the arriving tile stands in
+                        // for the one that was under the finger, so it takes
+                        // the carried treatment and lets .tile's color
+                        // transitions fade it back to resting over the glide.
+                        // Sharing the branch is safe because nothing can come
+                        // between it and the drop-target branch on the seed
+                        // frame: setSelected(null) is batched with the seed,
+                        // so `selected` is already null there.
                         bg = "var(--selected-bg)";
                         fg = "var(--selected-text)";
                         borderColor = "transparent";
@@ -1021,7 +1144,9 @@ export default function ConnectionsOrganizer() {
                         fg = "var(--selected-text)";
                         borderColor = "transparent";
                         boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
-                      } else if (isDropTarget) {
+                      } else if (isDropTarget || (isSeeded && isDisplaced)) {
+                        // …and the displaced tile stands in for the drop
+                        // target, ring and all.
                         bg = "var(--tile-bg)";
                         fg = "var(--tile-text)";
                         borderColor = "transparent";
@@ -1046,15 +1171,22 @@ export default function ConnectionsOrganizer() {
                       // ring reaches 5.4px past a resting edge — a clear halo
                       // around the 1.04 tile, and still inside the 6px grid gap,
                       // so it never crowds the neighbours.
+                      //
+                      // A settling tile's seed outranks all of it for one
+                      // frame; once it drops, the tile has no inline transform
+                      // at all and .tile's 0.15s transition takes it home.
                       const liftTransform = isDragging
-                        ? `translate(${drag.dx}px, ${drag.dy}px) scale(1.04)`
+                        ? `translate(${drag.dx}px, ${drag.dy}px) scale(${DRAG_LIFT_SCALE})`
                         : isSelected
                         ? "scale(1.05)"
                         : isSwapping
                         ? "scale(0.9)"
                         : isDropTarget
-                        ? "scale(1.06)"
+                        ? `scale(${DROP_TARGET_SCALE})`
                         : undefined;
+                      const transform = isSeeded
+                        ? (isArriving ? settle.seeds.arriving : settle.seeds.displaced)
+                        : liftTransform;
 
                       return (
                         <div
@@ -1067,6 +1199,9 @@ export default function ConnectionsOrganizer() {
                               "tile",
                               flashing && "tile-pop",
                               isDragging && "tile-dragging",
+                              isSettling && "tile-settling",
+                              isSeeded && "tile-seeded",
+                              isArriving && "tile-arriving",
                             ].filter(Boolean).join(" ")}
                             ref={el => (tileRefs.current[idx] = el)}
                             // Still just the tap state: a drag is a gesture in
@@ -1092,7 +1227,7 @@ export default function ConnectionsOrganizer() {
                               // fontSize is owned by fitTileFonts (measured
                               // against the tile), not React, so it isn't
                               // reset on re-render.
-                              transform: liftTransform,
+                              transform,
                               boxShadow,
                             }}
                           >

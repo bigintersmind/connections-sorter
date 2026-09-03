@@ -7,10 +7,13 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  DRAG_LIFT_SCALE,
   DRAG_THRESHOLD_PX,
+  DROP_TARGET_SCALE,
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  settleTransforms,
   shouldCancelPointerPress,
   tileIndexAt,
   toPageRect,
@@ -181,5 +184,74 @@ describe("dropTargetIndex", () => {
     expect(dropTargetIndex(rects, 50, 250, 0, locks)).toBeNull();
     expect(dropTargetIndex(rects, 50, 350, 0, locks)).toBeNull();
     expect(dropTargetIndex(rects, 50, 350, 4, locks)).toBe(12);
+  });
+});
+
+describe("settleTransforms", () => {
+  const rects = board();
+
+  it("seeds the arriving tile where the finger left the carried one", () => {
+    // Tile 1 dragged onto tile 10: 100px right and 200px down between the two
+    // cells, and the pointer travelled (120, 330) from the press.
+    const { arriving } = settleTransforms(rects, 1, 10, 120, 330);
+    expect(arriving).toBe(`translate(20px, 130px) scale(${DRAG_LIFT_SCALE})`);
+  });
+
+  it("seeds the displaced tile on the drop target, with no pointer travel", () => {
+    const { displaced } = settleTransforms(rects, 1, 10, 120, 330);
+    expect(displaced).toBe(`translate(100px, 200px) scale(${DROP_TARGET_SCALE})`);
+  });
+
+  it("handles a drag up and to the left: both seeds go negative", () => {
+    const { arriving, displaced } = settleTransforms(rects, 10, 1, -120, -330);
+    expect(arriving).toBe(`translate(-20px, -130px) scale(${DRAG_LIFT_SCALE})`);
+    expect(displaced).toBe(`translate(-100px, -200px) scale(${DROP_TARGET_SCALE})`);
+  });
+
+  it("keeps a same-row swap on one axis", () => {
+    const { arriving, displaced } = settleTransforms(rects, 4, 6, 205, 3);
+    expect(arriving).toBe(`translate(5px, 3px) scale(${DRAG_LIFT_SCALE})`);
+    expect(displaced).toBe(`translate(200px, 0px) scale(${DROP_TARGET_SCALE})`);
+  });
+
+  it("keeps a same-column swap on the other", () => {
+    const { arriving, displaced } = settleTransforms(rects, 1, 13, -4, 298);
+    expect(arriving).toBe(`translate(-4px, -2px) scale(${DRAG_LIFT_SCALE})`);
+    expect(displaced).toBe(`translate(0px, 300px) scale(${DROP_TARGET_SCALE})`);
+  });
+
+  it("reads deltas, so where the board sits on the page doesn't matter", () => {
+    const offset = board({ offsetX: 320, offsetY: 96 });
+    expect(settleTransforms(offset, 1, 10, 120, 330)).toEqual(
+      settleTransforms(rects, 1, 10, 120, 330),
+    );
+  });
+
+  it("puts the arriving tile exactly where the carried one was held", () => {
+    // The relation the seed exists to satisfy, stated against real-looking
+    // rects rather than round ones: the target cell plus the arriving seed's
+    // translate is the source cell plus the pointer's travel — the position
+    // App.jsx's liftTransform had the carried tile at. Expressed in two files
+    // against two origins, so it's the thing that drifts if either is edited.
+    const rects = board({ offsetX: 320.5, offsetY: 96.25 });
+    const [from, over, dx, dy] = [1, 10, 121.5, 331.1];
+    const source = rects[from];
+    const target = rects[over];
+    const translate = (s) => s.match(/translate\(([-\d.]+)px, ([-\d.]+)px\)/).slice(1).map(Number);
+    const { arriving, displaced } = settleTransforms(rects, from, over, dx, dy);
+    const [ax, ay] = translate(arriving);
+    expect(target.left + ax).toBeCloseTo(source.left + dx, 6);
+    expect(target.top + ay).toBeCloseTo(source.top + dy, 6);
+    // …and the displaced tile exactly on the drop target's cell.
+    const [px, py] = translate(displaced);
+    expect(source.left + px).toBeCloseTo(target.left, 6);
+    expect(source.top + py).toBeCloseTo(target.top, 6);
+  });
+
+  it("carries the scales the live drag uses, not literals of its own", () => {
+    const { arriving, displaced } = settleTransforms(rects, 0, 5, 0, 0);
+    expect(arriving.endsWith(` scale(${DRAG_LIFT_SCALE})`)).toBe(true);
+    expect(displaced.endsWith(` scale(${DROP_TARGET_SCALE})`)).toBe(true);
+    expect(DRAG_LIFT_SCALE).toBeLessThan(DROP_TARGET_SCALE);
   });
 });
