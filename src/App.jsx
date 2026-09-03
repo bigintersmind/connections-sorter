@@ -246,11 +246,13 @@ export default function ConnectionsOrganizer() {
   // commit frame is then a pure re-seat and nothing moves. Phase two
   // ("gliding", SETTLE_GLIDE_MS) drops both, and .tile's transitions carry
   // each tile to rest; the tiles keep only their lift so they ride above the
-  // neighbours they cross, and the displaced one — which is crossing cells
-  // that aren't its own for exactly this span — stops taking presses meant
-  // for them (.tile-crossing). Phase three ("landed", the rest of SETTLE_MS)
-  // is the lift alone, held while the box-shadows finish fading, with both
-  // tiles at rest and pressable again. Then this clears to null.
+  // neighbours they cross. Phase three ("landed", the rest of SETTLE_MS) is
+  // the lift alone, held while the box-shadows finish fading, with both tiles
+  // at rest. The displaced tile is out of hit-testing (.tile-crossing) for
+  // phases one and two together — the whole span it spends lifted away from
+  // its own cell, so a press meant for a cell it is crossing reaches the tile
+  // resting under it — and takes presses again at "landed". Then this clears
+  // to null.
   const [settle, setSettle] = useState(null);
   const [manualText, setManualText] = useState("");
   const [manualError, setManualError] = useState(null);
@@ -406,7 +408,9 @@ export default function ConnectionsOrganizer() {
   // press. A layout effect so the stale transform never reaches the screen.
   // A settle in flight goes the same way and for the same reason: its seeds
   // are inline transforms measured against the OLD board, and the tile that
-  // takes that index on the new one would wear them.
+  // takes that index on the new one would wear them — and past that frame
+  // the classes are the problem, since a .tile-crossing left behind would
+  // make a fresh board's tile refuse presses for the rest of the settle.
   useLayoutEffect(() => () => {
     dragRef.current = null;
     setDrag(null);
@@ -725,9 +729,10 @@ export default function ConnectionsOrganizer() {
   // cells that aren't its own, so index.css drops it out of hit-testing for
   // the two phases it is in transit (.tile-crossing) and the press falls
   // through to the tile resting under the finger. Which is why "landed" is a
-  // phase of its own — the lift outlasts the glide by 170ms while the
-  // box-shadows fade, and grabbing the tile that has just come to rest in the
-  // vacated cell has to work from the moment it gets there. (#24)
+  // phase of its own — the lift outlasts the glide by
+  // SETTLE_MS - SETTLE_GLIDE_MS (170ms today) while the box-shadows fade,
+  // and grabbing the tile that has just come to rest in the vacated cell has
+  // to work from the moment it gets there. (#24)
   //
   // Every step is guarded on identity: the cleanup cancels whatever is
   // pending whenever `settle` changes, so an older step can't advance a newer

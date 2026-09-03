@@ -26,9 +26,9 @@ export const DRAG_THRESHOLD_PX = 7;
 export const DRAG_LIFT_SCALE = 1.04;
 export const DROP_TARGET_SCALE = 1.06;
 
-// The settle after a committed drop, in two spans, both timed by App.jsx
-// against transitions that live in index.css — so dragSwap.test.js reads the
-// stylesheet and checks the numbers still agree.
+// The settle after a committed drop: the glide it opens with, and the total it
+// runs to — both timed by App.jsx against transitions that live in index.css —
+// so dragSwap.test.js reads the stylesheet and checks the numbers still agree.
 //
 // The glide is .tile's own `transform 0.15s`: the frame the seeds come off,
 // both tiles start moving, and by SETTLE_GLIDE_MS each is at rest in its new
