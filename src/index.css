@@ -15,6 +15,28 @@
   --font: 'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium',
     'Helvetica Neue', Arial, sans-serif;
 
+  /* The scale. Not themed, so defined once. Five type steps and three radii
+     cover the UI — pills (999px) and circles (50%) aside; the remaining
+     exceptions are deliberate and commented where they sit: the tile word
+     (measured by fitTileFont.js), the day switcher's segments (fitted to a
+     320px header in #15), the sheet's 18px top corners and the "how this
+     works" heading. */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+
+  /* The page pair. --bg is hand-copied in four places that can't read this
+     file: the theme-color meta, the pre-paint script and the fallback <style>
+     in index.html, and THEME_COLORS in src/theme.js — and that fallback also
+     mirrors --text, --text-soft and --text-muted, while DESIGN.md's
+     frontmatter mirrors the whole palette. (--bg-2 is copied nowhere; it sits
+     here because the two are the page's pair.) theme.test.js pins every copy
+     to these. */
   --bg: #f1efe5;
   --bg-2: #faf8f1;
 
@@ -28,11 +50,17 @@
   --text: #1b1813;
   --text-soft: #565347;
   --text-muted: #6c695b;
-  /* Decoration and disabled states only — below 4.5:1, never running text. */
+  /* Below 4.5:1 everywhere in light and on --surface in dark, and only just
+     over the line on the dark page (4.53:1) — so decoration and disabled
+     states only, never running text. */
   --text-faint: #918d7c;
 
   --border: #e6e2d5;
   --border-strong: #d6d1c1;
+  /* The boundary of a field you can type in, at 3:1 against both the page and
+     the field's own fill (WCAG 1.4.11) — `--border` and `--border-strong` are
+     hairlines and bordered-button edges, never a field's. */
+  --input-border: #8a8677;
 
   --selected-bg: #29251e;
   --selected-text: #fbfaf4;
@@ -50,7 +78,10 @@
   --card-shadow-hover: 0 4px 10px rgba(40, 37, 26, 0.09), 0 14px 30px rgba(40, 37, 26, 0.10);
 
   --error-bg: #fbf1ef;
-  --error-text: #c0473b;
+  /* 5.1:1 on --error-bg (and 5.6:1 on --surface, where the sheet's Reset item
+     uses it). The old #c0473b landed on 4.50:1 exactly — no margin at all for
+     a later nudge of either color. */
+  --error-text: #b53f33;
 
   /* Dimmer behind the overflow sheet and the "how this works" dialog. */
   --backdrop: rgba(28, 25, 18, 0.34);
@@ -76,6 +107,7 @@
 
   --border: #322f27;
   --border-strong: #433f33;
+  --input-border: #706b5a;
 
   --selected-bg: #f2f0e6;
   --selected-text: #1b1813;
@@ -197,19 +229,57 @@ body::before {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: 9px;
+  border-radius: var(--r-sm);
   font-family: var(--font);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
 }
 .small-btn:disabled { color: var(--text-faint); }
-.icon-btn { padding: 7px 10px; font-size: 15px; font-weight: 700; line-height: 1; }
+.icon-btn { padding: 7px 10px; font-size: var(--fs-lg); line-height: 1; }
+/* The inline SVG icons (src/icons.jsx). Sized in em so each takes the size
+   of the text it sits in, and sunk 0.125em under the baseline so the 1em box
+   centres on the x-height the way a glyph would. The two modifiers carry the
+   gap the old text characters had as a literal space. */
+.icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  flex: none;
+}
+.icon-before { margin-right: 0.3em; }
+.icon-after { margin-left: 0.3em; }
+/* The manual screen's Load-Puzzle / Back pair. Only their colors are
+   here (layout is inline in App.jsx's styles.btnPrimary / btnSecondary),
+   because an inline `background` *or* `border` outranks the :hover rules
+   below — which is exactly how both hovers used to change nothing: the
+   primary's inline fill hid its hover, and Back's inline `border` shorthand
+   outranked the edge its hover set. */
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-text);
+  border: none;
+}
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
 @media (hover: hover) {
   .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
-  .btn-secondary:not(:disabled):hover { border-color: var(--border-strong); }
-  .small-btn:not(:disabled):hover { border-color: var(--border-strong); }
+  /* Shuffle, the overflow trigger, Retry and Back all rest on --border-strong,
+     so the old hover re-set the border they already had and nothing moved
+     (and Back's inline `border` shorthand outranked the rule outright — see
+     .btn-secondary).
+     Tint the fill and darken the edge instead — --text-faint is allowed here
+     because a hover border is decoration, not text or a state. */
+  .btn-secondary:not(:disabled):hover,
+  .small-btn:not(:disabled):hover {
+    background: var(--bg-2);
+    border-color: var(--text-faint);
+  }
   .ghost-btn:not(:disabled):hover { color: var(--text); }
   .footer-link:hover { text-decoration: underline; }
 }
@@ -267,15 +337,34 @@ body::before {
 
 button:disabled { cursor: not-allowed; }
 /* The borderless buttons — the notice's Retry and dismiss, the empty state's
-   "enter the words yourself". The box carries the WCAG 2.5.8 target size while
-   the glyph keeps its light weight: with no border or fill to draw, the larger
-   hit area is invisible. */
+   "enter the words yourself". One treatment with three small modifiers rather
+   than three inline style objects. The box carries the WCAG 2.5.8 target size
+   while the label keeps its light weight: with no border or fill to draw, the
+   larger hit area is invisible. */
 .ghost-btn {
   display: inline-grid;
   place-items: center;
   min-width: 32px;
   min-height: 32px;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  font-family: var(--font);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  cursor: pointer;
 }
+/* The empty state's "or enter the words yourself": a muted link. */
+.ghost-btn-link { text-decoration: underline; }
+/* The notice's Retry: the one action in the bar, so it carries the weight. */
+.ghost-btn-action {
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+/* The notice's dismiss, pushed to the far end of the bar. */
+.ghost-btn-end { margin-left: auto; }
 /* The notice's Retry is disabled while a load is already running — the
    ghost treatment has no border or fill to grey out, so fade it. */
 .ghost-btn:disabled { opacity: 0.5; }
@@ -300,6 +389,12 @@ textarea:focus-visible {
 /* The segments sit inside a pill with 2px of padding, so a 2px-offset ring
    would spill over the group's border — tuck it in. */
 .seg:focus-visible { outline-offset: -1px; }
+/* Same idea for the sheet's full-width rows: at 100% of the dialog an outset
+   ring hangs off both sides — off-screen on a phone, so the top and bottom
+   edges read as two heavy dividers, and past the card's rounded corners on
+   desktop. Inside the row it reads as the rectangle it is. */
+.sheet-item:focus-visible,
+.sheet-close:focus-visible { outline-offset: -3px; }
 
 /* ------------------------- Segmented controls -----------------------------
    The Today / Yesterday / weekday (/ Custom) switcher in the board header, and
@@ -345,6 +440,9 @@ textarea:focus-visible {
   border-radius: 999px;
   background: none;
   font-family: var(--font);
+  /* Literal, not --fs-sm — this and the dense / narrow sizes below are the
+     320px budget from #15, tuned to the half-pixel; retune all of them
+     together or not at all. */
   font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
@@ -380,7 +478,7 @@ textarea:focus-visible {
   .segs-dense { gap: 0; }
   .segs-dense .seg { padding: 5px 4px; font-size: 11.5px; }
   .segs-dense .seg-dot { display: none; }
-  .small-btn { padding: 6px 8px; font-size: 12px; }
+  .small-btn { padding: 6px 8px; font-size: var(--fs-xs); }
   .icon-btn { padding: 6px 8px; }
 }
 
@@ -420,6 +518,8 @@ textarea:focus-visible {
   max-width: 100%;
   padding: 0;
   border: none;
+  /* Literal: the sheet's top corners are the one radius that reads at a
+     glance, and --r-lg's 16px is visibly tighter on a full-width edge. */
   border-radius: 18px 18px 0 0;
   background: var(--surface);
   color: var(--text);
@@ -438,7 +538,7 @@ textarea:focus-visible {
     margin: auto;
     width: auto;
     max-width: 340px;
-    border-radius: 16px;
+    border-radius: var(--r-lg);
   }
 }
 
@@ -452,7 +552,7 @@ textarea:focus-visible {
   border: none;
   background: none;
   font-family: var(--font);
-  font-size: 15px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--text);
   text-align: left;
@@ -477,7 +577,7 @@ textarea:focus-visible {
 .sheet-hint {
   display: block;
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--text-muted);
 }
@@ -491,7 +591,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 20px;
-  font-size: 15px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--text);
 }
@@ -512,7 +612,7 @@ textarea:focus-visible {
   border-top: 1px solid var(--border);
   background: none;
   font-family: var(--font);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;

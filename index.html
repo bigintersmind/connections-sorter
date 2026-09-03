@@ -51,7 +51,10 @@
     <style>
       /* Paint the page background immediately (before the JS-imported
          stylesheet loads) so there's no white flash, in either theme. The
-         script above has already stamped data-theme on <html>. */
+         script above has already stamped data-theme on <html>. These two
+         backgrounds are --bg, and the fallback's three text colors are --text,
+         --text-soft and --text-muted, hand-copied from src/index.css because
+         nothing here can read it; src/theme.test.js pins them to the tokens. */
       body { margin: 0; background: #f1efe5; }
       :root[data-theme="dark"] body { background: #131210; }
       .seo-fallback {
@@ -59,15 +62,15 @@
         margin: 0 auto;
         padding: 64px 24px;
         font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-        color: #1a1a1a;
+        color: #1b1813;
         line-height: 1.5;
       }
       .seo-fallback h1 { font-size: 32px; margin: 0 0 16px; letter-spacing: -0.5px; }
-      .seo-fallback p { margin: 0 0 12px; color: #444; }
-      .seo-fallback .muted { color: #888; font-size: 14px; margin-top: 24px; }
+      .seo-fallback p { margin: 0 0 12px; color: #565347; }
+      .seo-fallback .muted { color: #6c695b; font-size: 14px; margin-top: 24px; }
       :root[data-theme="dark"] .seo-fallback { color: #f2f0e6; }
-      :root[data-theme="dark"] .seo-fallback p { color: #9a978a; }
-      :root[data-theme="dark"] .seo-fallback .muted { color: #6b6859; }
+      :root[data-theme="dark"] .seo-fallback p { color: #c4c1b4; }
+      :root[data-theme="dark"] .seo-fallback .muted { color: #9a978a; }
     </style>
   </head>
   <body>

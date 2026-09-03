@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fitTileFonts } from "./fitTileFont.js";
 import {
+  ArrowUpIcon,
+  CheckIcon,
+  CircleIcon,
+  CloseIcon,
+  ExternalIcon,
+  MoreIcon,
+} from "./icons.jsx";
+import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
@@ -767,8 +775,8 @@ export default function ConnectionsOrganizer() {
     return (
       // The whole screen is the form, so the container itself is the landmark.
       <main style={styles.container}>
-        <div style={{ ...styles.header, paddingTop: 12, paddingBottom: 0 }}>
-          <h1 id="manual-heading" style={{ ...styles.title, fontSize: 20 }}>Enter 16 Words</h1>
+        <div style={styles.header}>
+          <h1 id="manual-heading" style={styles.title}>Enter 16 Words</h1>
           <p id="manual-subtitle" style={styles.subtitle}>One per line, or comma-separated</p>
         </div>
         <textarea
@@ -885,7 +893,7 @@ export default function ConnectionsOrganizer() {
               aria-haspopup="dialog"
               aria-expanded={overflowOpen}
             >
-              ⋯
+              <MoreIcon />
             </button>
           </div>
         </div>
@@ -899,20 +907,18 @@ export default function ConnectionsOrganizer() {
           <div className="notice" style={styles.notice}>
             <span>{loadError.message}</span>
             <button
-              className="ghost-btn"
-              style={styles.noticeAction}
+              className="ghost-btn ghost-btn-action"
               onClick={() => loadDay(loadError.key)}
               disabled={fetchingKey !== null}
             >
               Retry
             </button>
             <button
-              className="ghost-btn"
-              style={styles.noticeDismiss}
+              className="ghost-btn ghost-btn-end"
               onClick={() => setLoadError(null)}
               aria-label="Dismiss"
             >
-              ✕
+              <CloseIcon />
             </button>
           </div>
         )}
@@ -944,16 +950,20 @@ export default function ConnectionsOrganizer() {
                       aria-label={`Lock ${color.name} row`}
                       onClick={() => toggleLock(rowIdx)}
                     >
-                      {/* The glyph restates aria-pressed, so hide it and leave
-                          the color as the button's whole accessible name. */}
-                      <span aria-hidden="true">{locked ? "✓ " : "○ "}</span>
+                      {/* The icon restates aria-pressed, and the aria-label
+                          above already names the row, so it stays hidden. */}
+                      {locked ? (
+                        <CheckIcon className="icon-before" />
+                      ) : (
+                        <CircleIcon className="icon-before" />
+                      )}
                       {color.name}
                     </button>
                     <input
                       className="label-input"
                       style={{
                         ...styles.labelInput,
-                        borderColor: locked ? `${color.bg}aa` : "var(--border)",
+                        borderColor: locked ? `${color.bg}aa` : "var(--input-border)",
                         background: locked ? `${color.bg}22` : "var(--input-bg)",
                         // Once locked, the row is settled — let its label recede so
                         // the lock button + colored tiles carry the row.
@@ -1113,8 +1123,7 @@ export default function ConnectionsOrganizer() {
                   Retry
                 </button>
                 <button
-                  className="ghost-btn"
-                  style={styles.linkBtn}
+                  className="ghost-btn ghost-btn-link"
                   onClick={() => setScreen("manual")}
                 >
                   or enter the words yourself
@@ -1159,9 +1168,11 @@ export default function ConnectionsOrganizer() {
             ""
           ) : selected !== null ? (
             <>
-              {/* The arrow points at the picked-up tile on screen; spoken, it
-                  would just prefix the sentence with "up arrow". */}
-              <span aria-hidden="true">↑ </span>Tap another tile to swap
+              {/* The arrow points up at the picked-up tile on screen and is
+                  decoration only — the sentence reads the same without it, so
+                  it stays hidden. */}
+              <ArrowUpIcon className="icon-before" />
+              Tap another tile to swap
             </>
           ) : (
             "Tap a tile to select, then another to swap"
@@ -1179,7 +1190,8 @@ export default function ConnectionsOrganizer() {
           target="_blank"
           rel="noopener noreferrer"
         >
-          Play the official game ↗
+          Play the official game
+          <ExternalIcon className="icon-after" />
         </a>
       </footer>
 
@@ -1247,7 +1259,8 @@ export default function ConnectionsOrganizer() {
             rel="noopener noreferrer"
             onClick={closeOverflow}
           >
-            Play the official game ↗
+            Play the official game
+            <ExternalIcon className="icon-after" />
           </a>
           {/* Destructive, so it comes last and in its own group: a visible band
               rather than another hairline, which also keeps a thumb aimed at
@@ -1304,10 +1317,11 @@ const styles = {
     margin: "0 auto",
     boxSizing: "border-box",
   },
+  // The manual screen's heading block (the board screen has no title row).
   header: {
     textAlign: "center",
-    paddingTop: 28,
-    paddingBottom: 8,
+    paddingTop: 12,
+    paddingBottom: 0,
   },
   colorDots: {
     display: "flex",
@@ -1321,14 +1335,14 @@ const styles = {
     display: "inline-block",
   },
   title: {
-    fontSize: 27,
+    fontSize: "var(--fs-xl)",
     fontWeight: 800,
     color: "var(--text)",
     margin: 0,
     letterSpacing: "-0.6px",
   },
   subtitle: {
-    fontSize: 13.5,
+    fontSize: "var(--fs-sm)",
     color: "var(--text-muted)",
     marginTop: 4,
     fontWeight: 500,
@@ -1355,43 +1369,26 @@ const styles = {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: 2,
-    // 6px of vertical padding, not 8: the Retry and dismiss buttons inside are
-    // 32px target boxes with no border or fill, so their own height carries
-    // most of the optical padding. 6 and not less because the shared focus ring
-    // (3px, 2px offset) would otherwise land on the bar's own border.
+    // Both spacings are set by the shared focus ring (3px at a 2px offset, so
+    // it reaches 5px past the button it's on): 8px of gap keeps Retry's ring
+    // clear of the end of the message beside it with 3px of air (at 6 it
+    // cleared by a single pixel and read as touching), and 6px of vertical
+    // padding keeps it off the bar's own border. Neither is optical — the
+    // Retry and dismiss buttons inside are 32px target boxes with no border
+    // or fill, so their own height already carries the padding the bar would
+    // otherwise need.
+    gap: 8,
     padding: "6px 12px",
     marginBottom: 12,
     background: "var(--surface)",
     border: "1px solid var(--border)",
-    borderRadius: 12,
+    borderRadius: "var(--r-md)",
     boxShadow: "var(--card-shadow)",
-    fontSize: 13,
+    fontSize: "var(--fs-sm)",
     color: "var(--text-soft)",
   },
-  noticeAction: {
-    background: "none",
-    border: "none",
-    padding: "4px 6px",
-    fontSize: 13,
-    fontWeight: 700,
-    color: "var(--text)",
-    textDecoration: "underline",
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-    whiteSpace: "nowrap",
-  },
-  noticeDismiss: {
-    background: "none",
-    border: "none",
-    padding: "4px 8px",
-    marginLeft: "auto",
-    fontSize: 13,
-    color: "var(--text-muted)",
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-    lineHeight: 1,
-  },
+  // Its Retry and dismiss buttons, and the empty state's link, are .ghost-btn
+  // and its modifiers in index.css.
   grid: {
     display: "flex",
     flexDirection: "column",
@@ -1409,7 +1406,7 @@ const styles = {
     textAlign: "center",
   },
   emptyText: {
-    fontSize: 14,
+    fontSize: "var(--fs-md)",
     color: "var(--text-muted)",
     margin: 0,
   },
@@ -1421,16 +1418,6 @@ const styles = {
     borderTopColor: "var(--text)",
     animation: "spin 0.8s linear infinite",
   },
-  linkBtn: {
-    background: "none",
-    border: "none",
-    fontSize: 13,
-    color: "var(--text-muted)",
-    cursor: "pointer",
-    fontFamily: "var(--font)",
-    textDecoration: "underline",
-    padding: 6,
-  },
   rowControl: {
     display: "flex",
     alignItems: "center",
@@ -1438,12 +1425,16 @@ const styles = {
     marginBottom: 6,
   },
   lockBtn: {
-    fontSize: 11.5,
+    fontSize: "var(--fs-xs)",
     // A target-size floor that doesn't depend on the font's line box, shared
-    // with the label input beside it so the row reads as one line.
+    // with the label input beside it so the row reads as one line. The
+    // line-height (the tile's) keeps the floor in charge: at the font's
+    // normal leading a 12px label plus the padding and border overruns 30,
+    // and every row would grow with it.
+    lineHeight: 1.15,
     minHeight: 30,
     padding: "7px 10px",
-    borderRadius: 7,
+    borderRadius: "var(--r-sm)",
     border: "1px solid",
     cursor: "pointer",
     whiteSpace: "nowrap",
@@ -1452,11 +1443,11 @@ const styles = {
   },
   labelInput: {
     flex: 1,
-    fontSize: 12.5,
+    fontSize: "var(--fs-sm)",
     minHeight: 30,
     padding: "6px 10px",
     border: "1px solid",
-    borderRadius: 7,
+    borderRadius: "var(--r-sm)",
     fontFamily: "var(--font)",
     color: "var(--text)",
   },
@@ -1477,7 +1468,7 @@ const styles = {
     width: "100%",
     height: "100%",
     border: "1.5px solid transparent",
-    borderRadius: 11,
+    borderRadius: "var(--r-md)",
     // cursor lives in index.css (.tile): a locked row's tiles need a variant,
     // and an inline value would win over it.
     fontWeight: 700,
@@ -1508,13 +1499,13 @@ const styles = {
   },
   boardHint: {
     textAlign: "center",
-    fontSize: 12.5,
+    fontSize: "var(--fs-sm)",
     color: "var(--text-muted)",
     marginTop: 16,
   },
   footer: {
     textAlign: "center",
-    fontSize: 12,
+    fontSize: "var(--fs-xs)",
     color: "var(--text-muted)",
     lineHeight: 1.5,
     margin: "18px auto 0",
@@ -1526,6 +1517,8 @@ const styles = {
     whiteSpace: "nowrap",
   },
   howHeading: {
+    // Between --fs-lg and --fs-xl on purpose: a dialog heading, not a page
+    // title, and 15 reads as a row.
     fontSize: 17,
     fontWeight: 800,
     color: "var(--text)",
@@ -1533,34 +1526,34 @@ const styles = {
     letterSpacing: "-0.3px",
   },
   howList: {
-    fontSize: 14,
+    fontSize: "var(--fs-md)",
     color: "var(--text-soft)",
     lineHeight: 1.5,
     margin: 0,
     paddingLeft: 20,
   },
   howNote: {
-    fontSize: 12.5,
+    fontSize: "var(--fs-sm)",
     color: "var(--text-muted)",
     lineHeight: 1.45,
     margin: "14px 0 0",
   },
   error: {
     color: "var(--error-text)",
-    fontSize: 13,
+    fontSize: "var(--fs-sm)",
     textAlign: "center",
     marginTop: 10,
     padding: "7px 12px",
     background: "var(--error-bg)",
-    borderRadius: 10,
+    borderRadius: "var(--r-md)",
   },
   textarea: {
     width: "100%",
     padding: 14,
-    fontSize: 14,
+    fontSize: "var(--fs-md)",
     fontFamily: "var(--font)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: 14,
+    border: "1px solid var(--input-border)",
+    borderRadius: "var(--r-md)",
     background: "var(--input-bg)",
     color: "var(--text)",
     boxSizing: "border-box",
@@ -1572,27 +1565,26 @@ const styles = {
     gap: 10,
     marginTop: 12,
   },
+  // The manual screen's two buttons. Their colors — fill, text, edge — live in
+  // index.css (.btn-primary / .btn-secondary), not here: an inline `background`
+  // or `border` outranks the class's :hover rule (the primary's fill and Back's
+  // edge both did), which is how both hovers came to change nothing. Layout
+  // stays inline.
   btnPrimary: {
     flex: 1,
     padding: "13px 20px",
-    fontSize: 15,
+    fontSize: "var(--fs-lg)",
     fontWeight: 700,
-    background: "var(--primary)",
-    color: "var(--primary-text)",
-    border: "none",
-    borderRadius: 12,
+    borderRadius: "var(--r-md)",
     cursor: "pointer",
     fontFamily: "var(--font)",
   },
   btnSecondary: {
     flex: 1,
     padding: "13px 20px",
-    fontSize: 15,
+    fontSize: "var(--fs-lg)",
     fontWeight: 600,
-    background: "var(--surface)",
-    color: "var(--text)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: 12,
+    borderRadius: "var(--r-md)",
     cursor: "pointer",
     fontFamily: "var(--font)",
   },
