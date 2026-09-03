@@ -366,6 +366,24 @@ body::before {
 .reveal:has(.tile-arriving) {
   z-index: 3;
 }
+/* And being on top means taking the presses. Hit-testing follows the same
+   stacking order the paint does, so while the displaced tile is crossing
+   cells that aren't its own, a pointerdown meant for one of them lands on it
+   instead — a tile on its way elsewhere, whose word has already moved. Out of
+   hit-testing for the transit, the press falls through to the tile resting
+   underneath, which is the one under the finger: the crossing tile's own cell
+   is back at `from` and doesn't contain the point, so nothing is missed. The
+   arriving tile stays live throughout — the finger is right there, and a
+   press at the release point has to pick up the tile just dropped.
+
+   Bounded to the transit, not to the lift: App.jsx takes this class off at
+   the "landed" phase, SETTLE_GLIDE_MS in, where .tile's transform transition
+   has finished, while .tile-settling above runs on to SETTLE_MS for the
+   box-shadows. By then the displaced tile is at rest in the vacated cell and
+   a quick grab of it — a plausible next move — has to work. */
+.tile-crossing {
+  pointer-events: none;
+}
 
 button:disabled { cursor: not-allowed; }
 /* The borderless buttons — the notice's Retry and dismiss, the empty state's

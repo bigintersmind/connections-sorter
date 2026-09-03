@@ -3,8 +3,10 @@
 // The pointer plumbing is a browser thing and is verified by hand; what can
 // drift silently is the arithmetic underneath it — a threshold that turns taps
 // into drags, a hit test that lets a locked row take a drop, a coordinate
-// space that desyncs after a scroll. Runs as plain Node, like share.test.js.
+// space that desyncs after a scroll, a settle span that no longer matches the
+// transition it is timing. Runs as plain Node, like share.test.js.
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DRAG_LIFT_SCALE,
@@ -13,6 +15,8 @@ import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  SETTLE_GLIDE_MS,
+  SETTLE_MS,
   settleTransforms,
   shouldCancelPointerPress,
   tileIndexAt,
@@ -253,5 +257,40 @@ describe("settleTransforms", () => {
     expect(arriving.endsWith(` scale(${DRAG_LIFT_SCALE})`)).toBe(true);
     expect(displaced.endsWith(` scale(${DROP_TARGET_SCALE})`)).toBe(true);
     expect(DRAG_LIFT_SCALE).toBeLessThan(DROP_TARGET_SCALE);
+  });
+});
+
+// The settle's two spans are setTimeouts in App.jsx, but what they are timing
+// is .tile's transition — which lives in index.css, a file this module can't
+// import and nothing else keeps it honest against. The glide has to be
+// exactly the transform's duration, because that is when the displaced tile
+// stops crossing cells and becomes pressable again (.tile-crossing), and the
+// settle as a whole has to outlast every transition on the tile so the lift
+// is never taken away mid-paint. Same shape as theme.test.js's check that
+// index.html and index.css agree with theme.js.
+describe("the settle spans match .tile's transition in index.css", () => {
+  const css = readFileSync(new URL("./index.css", import.meta.url), "utf8");
+  // The `.tile { … }` rule — `.tile-dragging` and the rest don't match, since
+  // only whitespace may sit between the selector and the brace — then its
+  // transition value, which wraps across lines, so take it to the semicolon.
+  const rule = css.match(/^\.tile[ \t]*\{([^}]*)\}/m)?.[1] ?? "";
+  const transition = rule.match(/transition:\s*([^;]+);/)?.[1] ?? "";
+  const ms = (value, unit) => Number(value) * (unit === "ms" ? 1 : 1000);
+  const durations = [...transition.matchAll(/\s([\d.]+)(m?s)\b/g)].map(([, v, u]) => ms(v, u));
+
+  it("finds the declaration to compare", () => {
+    expect(rule, ".tile's rule is not in index.css").not.toBe("");
+    expect(transition, ".tile has no transition to time the settle against").not.toBe("");
+    expect(durations.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("glides for exactly .tile's transform duration", () => {
+    const transform = transition.match(/(?:^|,)\s*transform\s+([\d.]+)(m?s)\b/);
+    expect(transform, "no transform duration in .tile's transition").not.toBeNull();
+    expect(ms(transform[1], transform[2])).toBe(SETTLE_GLIDE_MS);
+  });
+
+  it("holds the lift past the longest transition on the tile", () => {
+    expect(Math.max(...durations)).toBeLessThanOrEqual(SETTLE_MS);
   });
 });
