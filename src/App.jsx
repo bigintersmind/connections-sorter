@@ -14,6 +14,8 @@ import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  SETTLE_GLIDE_MS,
+  SETTLE_MS,
   settleTransforms,
   shouldCancelPointerPress,
   toPageRect,
@@ -60,13 +62,6 @@ const OFFICIAL_GAME_URL = "https://www.nytimes.com/games/connections";
 const SUPERSEDED = "superseded";
 
 const FETCH_TIMEOUT_MS = 9000;
-
-// How long the two tiles of a dropped swap stay lifted and settling. Past the
-// longest transition .tile runs in index.css — the 0.3s box-shadow, which
-// fades the carried tile's drop and the target's ring — so the lift is only
-// ever taken away once nothing of the glide is still painting; the transform
-// itself is home by 0.15s.
-const SETTLE_MS = 320;
 
 // Phones, and Safari and Chrome on macOS, have a native share sheet; Firefox
 // and Chrome on Linux don't, and get the clipboard instead. Decided once —
@@ -242,15 +237,22 @@ export default function ConnectionsOrganizer() {
   const [drag, setDrag] = useState(null);
   // The settle after a committed drop, or null. The swap is already in the
   // store by the time this is set — this is only what the two tiles LOOK like
-  // on the way to their new cells. { from, over, seeds, seeded }: the two
+  // on the way to their new cells. { from, over, seeds, phase }: the two
   // indices that traded, the pair of transforms from settleTransforms, and
-  // which of the two phases is on screen.
+  // which of the three phases is on screen.
   //
-  // Phase one (seeded) renders both tiles at the seeds, wearing the looks they
-  // had on the last held frame, with the transition off — the commit frame is
-  // then a pure re-seat and nothing moves. Phase two drops both, and .tile's
-  // transitions carry each tile to rest; the tiles keep only their lift so
-  // they ride above the neighbours they cross. Then this clears to null.
+  // Phase one ("seeded", one frame) renders both tiles at the seeds, wearing
+  // the looks they had on the last held frame, with the transition off — the
+  // commit frame is then a pure re-seat and nothing moves. Phase two
+  // ("gliding", SETTLE_GLIDE_MS) drops both, and .tile's transitions carry
+  // each tile to rest; the tiles keep only their lift so they ride above the
+  // neighbours they cross. Phase three ("landed", the rest of SETTLE_MS) is
+  // the lift alone, held while the box-shadows finish fading, with both tiles
+  // at rest. The displaced tile is out of hit-testing (.tile-crossing) for
+  // phases one and two together — the whole span it spends lifted away from
+  // its own cell, so a press meant for a cell it is crossing reaches the tile
+  // resting under it — and takes presses again at "landed". Then this clears
+  // to null.
   const [settle, setSettle] = useState(null);
   const [manualText, setManualText] = useState("");
   const [manualError, setManualError] = useState(null);
@@ -270,9 +272,10 @@ export default function ConnectionsOrganizer() {
   const dragRef = useRef(null);
   // Set for one task after a drag ends, to swallow the click that follows it.
   const suppressClickRef = useRef(false);
-  // The settle's two pending callbacks — the frame that unseeds it and the
-  // timeout that ends it — so both can be called off if the board goes away
-  // under them.
+  // The settle's pending callbacks — the frame that unseeds it, and the one
+  // timeout slot its two later phase steps share (only ever one is pending) —
+  // so whatever is scheduled can be called off if the board goes away under
+  // it.
   const settleTimersRef = useRef({ raf: 0, timeout: 0 });
   const tileRefs = useRef([]);
   const gridRef = useRef(null);
@@ -405,7 +408,9 @@ export default function ConnectionsOrganizer() {
   // press. A layout effect so the stale transform never reaches the screen.
   // A settle in flight goes the same way and for the same reason: its seeds
   // are inline transforms measured against the OLD board, and the tile that
-  // takes that index on the new one would wear them.
+  // takes that index on the new one would wear them — and past that frame
+  // the classes are the problem, since a .tile-crossing left behind would
+  // make a fresh board's tile refuse presses for the rest of the settle.
   useLayoutEffect(() => () => {
     dragRef.current = null;
     setDrag(null);
@@ -695,7 +700,7 @@ export default function ConnectionsOrganizer() {
         from: press.from,
         over,
         seeds: settleTransforms(press.rects, press.from, over, x - press.startX, y - press.startY),
-        seeded: true,
+        phase: "seeded",
       });
     }
     // The drag wins over a pending tap. A tile selected by tap and then left
@@ -705,7 +710,8 @@ export default function ConnectionsOrganizer() {
     setSelected(null);
   }, [lockedRows, commitSwap, activeKey]);
 
-  // Run the settle: unseed on the next frame, then end it.
+  // Run the settle, a phase at a time: unseed on the next frame, hold the
+  // glide, then end it.
   //
   // The requestAnimationFrame is what makes the seeds a real starting point
   // rather than a value the browser never saw. React flushes an update made
@@ -718,22 +724,33 @@ export default function ConnectionsOrganizer() {
   //
   // A press landing during the settle simply wins — the settle is cosmetic,
   // the store is already right, and the rects a new drag measures are the
-  // cells', which a gliding tile doesn't move (handleTilePointerMove). What
-  // the glide can do is take the press: the displaced tile is lifted while it
-  // crosses cells, so a pointerdown on one of them lands on it rather than on
-  // the tile underneath. A stray pick-up inside 150ms of a release, not a
-  // store write — #24 tracks it.
+  // cells', which a gliding tile doesn't move (handleTilePointerMove). Nor
+  // does the glide take the press any more: the displaced tile is lifted over
+  // cells that aren't its own, so index.css drops it out of hit-testing for
+  // the two phases it is in transit (.tile-crossing) and the press falls
+  // through to the tile resting under the finger. Which is why "landed" is a
+  // phase of its own — the lift outlasts the glide by
+  // SETTLE_MS - SETTLE_GLIDE_MS (170ms today) while the box-shadows fade,
+  // and grabbing the tile that has just come to rest in the vacated cell has
+  // to work from the moment it gets there. (#24)
+  //
+  // Every step is guarded on identity: the cleanup cancels whatever is
+  // pending whenever `settle` changes, so an older step can't advance a newer
+  // settle — but say so in the updater rather than rely on it.
   useLayoutEffect(() => {
     if (!settle) return undefined;
-    if (settle.seeded) {
+    if (settle.phase === "seeded") {
       settleTimersRef.current.raf = requestAnimationFrame(() => {
-        // Guarded on identity: the cleanup below cancels this frame whenever
-        // `settle` changes, so a newer seed can't be unseeded early by an
-        // older frame — but say so in the updater rather than rely on it.
-        setSettle((s) => (s === settle ? { ...s, seeded: false } : s));
+        setSettle((s) => (s === settle ? { ...s, phase: "gliding" } : s));
       });
+    } else if (settle.phase === "gliding") {
+      settleTimersRef.current.timeout = setTimeout(() => {
+        setSettle((s) => (s === settle ? { ...s, phase: "landed" } : s));
+      }, SETTLE_GLIDE_MS);
     } else {
-      settleTimersRef.current.timeout = setTimeout(() => setSettle(null), SETTLE_MS);
+      settleTimersRef.current.timeout = setTimeout(() => {
+        setSettle((s) => (s === settle ? null : s));
+      }, SETTLE_MS - SETTLE_GLIDE_MS);
     }
     return clearSettleTimers;
   }, [settle, clearSettleTimers]);
@@ -1088,11 +1105,17 @@ export default function ConnectionsOrganizer() {
                       // The two tiles of a dropped swap, on their way to their
                       // new cells: the one that took the carried word and the
                       // one that took the target's. `isSeeded` is true only for
-                      // the single re-seat frame that starts the glide.
+                      // the single re-seat frame that starts the glide;
+                      // `isCrossing` covers that frame and the glide after it
+                      // — the span the displaced tile spends lifted over cells
+                      // that aren't its own, where index.css drops it out of
+                      // hit-testing so a press meant for one of them reaches
+                      // the tile resting underneath.
                       const isArriving = settle?.over === idx;
                       const isDisplaced = settle?.from === idx;
                       const isSettling = isArriving || isDisplaced;
-                      const isSeeded = isSettling && settle.seeded;
+                      const isSeeded = isSettling && settle.phase === "seeded";
+                      const isCrossing = isDisplaced && settle.phase !== "landed";
                       const word = tiles[idx] || "";
                       // Cascade the entrance top-left → bottom-right, capped so the
                       // last tile doesn't lag noticeably behind the first.
@@ -1201,6 +1224,7 @@ export default function ConnectionsOrganizer() {
                               isDragging && "tile-dragging",
                               isSettling && "tile-settling",
                               isSeeded && "tile-seeded",
+                              isCrossing && "tile-crossing",
                               isArriving && "tile-arriving",
                             ].filter(Boolean).join(" ")}
                             ref={el => (tileRefs.current[idx] = el)}

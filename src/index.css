@@ -343,14 +343,16 @@ body::before {
 
    Only the seed frame turns the transition off, which is why that is a class
    of its own: it has to be gone before the tiles are released, while the lift
-   below has to outlast the whole glide. */
+   below has to run the whole settle, past the glide and on through the
+   box-shadow fade. */
 .tile-seeded {
   transition: none;
 }
-/* Both tiles are travelling, so both ride above the board — and, as with the
-   carried tile, that takes lifting the CELL and not just the tile: `.reveal`'s
-   `both`-filled entrance leaves every cell with a stacking context of its own,
-   so a z-index inside one only sorts against that cell. */
+/* Both tiles are travelling, and stay lifted after they arrive while their
+   shadows fade, so both ride above the board — and, as with the carried tile,
+   that takes lifting the CELL and not just the tile: `.reveal`'s `both`-filled
+   entrance leaves every cell with a stacking context of its own, so a z-index
+   inside one only sorts against that cell. */
 .tile-settling {
   position: relative;
   z-index: 2;
@@ -365,6 +367,28 @@ body::before {
    after it. */
 .reveal:has(.tile-arriving) {
   z-index: 3;
+}
+/* And being on top means taking the presses. Hit-testing follows the same
+   stacking order the paint does, so while the displaced tile is crossing
+   cells that aren't its own, a pointerdown meant for one of them lands on it
+   instead — a tile on its way elsewhere, whose word has already moved. Out of
+   hit-testing for the transit, the press falls through to the tile resting
+   underneath, which is the one under the finger, so no press on a cell it
+   crosses is lost. The trade is its own cell, the one the dragged word
+   vacated: no tile rests there — only the crossing tile, still on its way to
+   it — so a press lands on the bare `.reveal` and does nothing until
+   "landed". A press aimed at a tile the player can see beats one aimed at a
+   tile still arriving, and the window shuts at SETTLE_GLIDE_MS. The arriving
+   tile stays live throughout — the finger is right there, and a press at the
+   release point has to pick up the tile just dropped.
+
+   Bounded to the transit, not to the lift: App.jsx takes this class off at
+   the "landed" phase, SETTLE_GLIDE_MS in, where .tile's transform transition
+   has finished, while .tile-settling above runs on to SETTLE_MS for the
+   box-shadows. By then the displaced tile is at rest in the vacated cell and
+   a quick grab of it — a plausible next move — has to work. */
+.tile-crossing {
+  pointer-events: none;
 }
 
 button:disabled { cursor: not-allowed; }

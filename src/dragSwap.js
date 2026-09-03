@@ -26,6 +26,23 @@ export const DRAG_THRESHOLD_PX = 7;
 export const DRAG_LIFT_SCALE = 1.04;
 export const DROP_TARGET_SCALE = 1.06;
 
+// The settle after a committed drop: the glide it opens with, and the total it
+// runs to — both timed by App.jsx against transitions that live in index.css —
+// so dragSwap.test.js reads the stylesheet and checks the numbers still agree.
+//
+// The glide is .tile's own `transform 0.15s`: the frame the seeds come off,
+// both tiles start moving, and by SETTLE_GLIDE_MS each is at rest in its new
+// cell. That is exactly how long the displaced tile spends lifted over cells
+// that aren't its own, which is how long a press has to fall through it
+// (.tile-crossing) — bound the dead spot to any longer and a quick grab of
+// the tile that just landed in the vacated cell would miss.
+export const SETTLE_GLIDE_MS = 150;
+// The whole settle runs past the longest transition .tile has — the 0.3s
+// box-shadow, which fades the carried tile's drop and the target's ring — so
+// the lift that keeps both tiles above the board is only ever taken away once
+// nothing of the settle is still painting.
+export const SETTLE_MS = 320;
+
 // A DOMRect is viewport-relative and goes stale the moment the page scrolls;
 // page coordinates don't. Takes the four edges rather than a DOMRect so it can
 // be called with a plain object in a test.

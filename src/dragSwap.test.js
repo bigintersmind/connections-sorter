@@ -3,8 +3,10 @@
 // The pointer plumbing is a browser thing and is verified by hand; what can
 // drift silently is the arithmetic underneath it — a threshold that turns taps
 // into drags, a hit test that lets a locked row take a drop, a coordinate
-// space that desyncs after a scroll. Runs as plain Node, like share.test.js.
+// space that desyncs after a scroll, a settle span that no longer matches the
+// transition it is timing. Runs as plain Node, like share.test.js.
 
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   DRAG_LIFT_SCALE,
@@ -13,6 +15,8 @@ import {
   dropTargetIndex,
   isTileInPlay,
   passedDragThreshold,
+  SETTLE_GLIDE_MS,
+  SETTLE_MS,
   settleTransforms,
   shouldCancelPointerPress,
   tileIndexAt,
@@ -253,5 +257,68 @@ describe("settleTransforms", () => {
     expect(arriving.endsWith(` scale(${DRAG_LIFT_SCALE})`)).toBe(true);
     expect(displaced.endsWith(` scale(${DROP_TARGET_SCALE})`)).toBe(true);
     expect(DRAG_LIFT_SCALE).toBeLessThan(DROP_TARGET_SCALE);
+  });
+});
+
+// The glide is a setTimeout of its own value in App.jsx and the total bounds
+// the one after it (SETTLE_MS - SETTLE_GLIDE_MS), but what both are timing is
+// .tile's transition — which lives in index.css, a file this module can't
+// import and nothing else keeps it honest against. The glide has to be
+// exactly the transform's duration, because that is when the displaced tile
+// stops crossing cells and becomes pressable again (.tile-crossing), and the
+// settle as a whole has to outlast every transition on the tile so the lift
+// is never taken away mid-paint. Same shape as theme.test.js's check that
+// index.html and index.css agree with theme.js.
+describe("the settle's timings agree with .tile's transition in index.css", () => {
+  const css = readFileSync(new URL("./index.css", import.meta.url), "utf8");
+  // The `.tile { … }` rule — `.tile-dragging` and the rest don't match, since
+  // only whitespace may sit between the selector and the brace — then its
+  // transition value, which wraps across lines, so take it to the semicolon.
+  const rule = css.match(/^\.tile[ \t]*\{([^}]*)\}/m)?.[1] ?? "";
+  // The LAST transition declaration in the rule — a later one overrides an
+  // earlier one, and the cascade is what the settle is actually timed against.
+  const transition = [...rule.matchAll(/transition:\s*([^;]+);/g)].at(-1)?.[1] ?? "";
+  const ms = (value, unit) => Number(value) * (unit === "ms" ? 1 : 1000);
+  // A duration opens the value or follows a comma or a space — `transition:`
+  // has already eaten the leading whitespace, so a list item that puts its
+  // duration first (`0.15s transform ease`, legal shorthand) still counts.
+  const durations = [...transition.matchAll(/(?:^|[\s,])([\d.]+)(m?s)\b/g)].map(([, v, u]) =>
+    ms(v, u),
+  );
+
+  it("finds the declaration to compare", () => {
+    expect(rule, ".tile's rule is not in index.css").not.toBe("");
+    expect(transition, ".tile has no transition to time the settle against").not.toBe("");
+    expect(durations.length, "no durations parsed out of .tile's transition").toBeGreaterThan(0);
+  });
+
+  it("glides for exactly .tile's transform duration", () => {
+    const transform = transition.match(/(?:^|,)\s*transform\s+([\d.]+)(m?s)\b/);
+    expect(transform, "no transform duration in .tile's transition").not.toBeNull();
+    expect(ms(transform[1], transform[2])).toBe(SETTLE_GLIDE_MS);
+  });
+
+  it("holds the lift at least as long as the longest transition on the tile", () => {
+    // Math.max of nothing is -Infinity, which would pass this on a broken
+    // parse — say so here rather than leave a green test beside a red guard.
+    expect(durations.length, "no durations parsed out of .tile's transition").toBeGreaterThan(0);
+    expect(Math.max(...durations)).toBeLessThanOrEqual(SETTLE_MS);
+  });
+
+  it("leaves a landed phase for the box-shadows to finish in", () => {
+    expect(SETTLE_GLIDE_MS).toBeLessThan(SETTLE_MS);
+  });
+
+  // The class is the fix for #24, not the number: rename it in either file and
+  // the press stops falling through with every duration above still agreeing.
+  // App.jsx spells it as a hand-copied string, so check both ends.
+  it("takes the crossing tile out of hit-testing", () => {
+    expect(css, ".tile-crossing no longer drops pointer-events").toMatch(
+      /\.tile-crossing\s*\{[^}]*pointer-events:\s*none/,
+    );
+    const app = readFileSync(new URL("./App.jsx", import.meta.url), "utf8");
+    expect(app, "App.jsx no longer applies the class index.css defines").toContain(
+      '"tile-crossing"',
+    );
   });
 });
