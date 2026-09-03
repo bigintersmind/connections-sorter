@@ -965,7 +965,7 @@ export default function ConnectionsOrganizer() {
                       className="label-input"
                       style={{
                         ...styles.labelInput,
-                        borderColor: locked ? `${color.bg}aa` : "var(--border)",
+                        borderColor: locked ? `${color.bg}aa` : "var(--input-border)",
                         background: locked ? `${color.bg}22` : "var(--input-bg)",
                         // Once locked, the row is settled — let its label recede so
                         // the lock button + colored tiles carry the row.
@@ -1370,11 +1370,15 @@ const styles = {
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: 2,
-    // 6px of vertical padding, not 8: the Retry and dismiss buttons inside are
-    // 32px target boxes with no border or fill, so their own height carries
-    // most of the optical padding. 6 and not less because the shared focus ring
-    // (3px, 2px offset) would otherwise land on the bar's own border.
+    // Both spacings are set by the shared focus ring (3px at a 2px offset, so
+    // it reaches 5px past the button it's on): 8px of gap keeps Retry's ring
+    // clear of the end of the message beside it with 3px of air (at 6 it
+    // cleared by a single pixel and read as touching), and 6px of vertical
+    // padding keeps it off the bar's own border. Neither is optical — the
+    // Retry and dismiss buttons inside are 32px target boxes with no border
+    // or fill, so their own height already carries the padding the bar would
+    // otherwise need.
+    gap: 8,
     padding: "6px 12px",
     marginBottom: 12,
     background: "var(--surface)",
@@ -1574,7 +1578,7 @@ const styles = {
     padding: 14,
     fontSize: 14,
     fontFamily: "var(--font)",
-    border: "1px solid var(--border-strong)",
+    border: "1px solid var(--input-border)",
     borderRadius: 14,
     background: "var(--input-bg)",
     color: "var(--text)",
@@ -1587,14 +1591,15 @@ const styles = {
     gap: 10,
     marginTop: 12,
   },
+  // The manual screen's two buttons. Their colors — fill, text, edge — live in
+  // index.css (.btn-primary / .btn-secondary), not here: an inline background
+  // outranks the class's :hover rule, which is how both hovers came to change
+  // nothing. Layout stays inline.
   btnPrimary: {
     flex: 1,
     padding: "13px 20px",
     fontSize: 15,
     fontWeight: 700,
-    background: "var(--primary)",
-    color: "var(--primary-text)",
-    border: "none",
     borderRadius: 12,
     cursor: "pointer",
     fontFamily: "var(--font)",
@@ -1604,9 +1609,6 @@ const styles = {
     padding: "13px 20px",
     fontSize: 15,
     fontWeight: 600,
-    background: "var(--surface)",
-    color: "var(--text)",
-    border: "1px solid var(--border-strong)",
     borderRadius: 12,
     cursor: "pointer",
     fontFamily: "var(--font)",

@@ -94,6 +94,36 @@ describe("index.html and index.css agree with theme.js", () => {
     expect(css).toMatch(new RegExp(`--bg:\\s*${THEME_COLORS.dark}\\b`));
   });
 
+  // The no-JS / pre-hydration fallback in index.html paints its text with the
+  // same hexes the --text tokens hold, copied by hand for the same reason as
+  // the backgrounds. Each copy is pinned to its token in both schemes, so a
+  // token change that forgets the mirror fails here instead of quietly
+  // leaving crawlers and no-JS visitors a different grey.
+  describe("the fallback's text colors are the --text tokens", () => {
+    const darkAt = css.indexOf(':root[data-theme="dark"]');
+    const blocks = { light: css.slice(0, darkAt), dark: css.slice(darkAt) };
+    const token = (scheme, name) =>
+      blocks[scheme].match(new RegExp(`^\\s*${name}:\\s*(#[0-9a-f]{6})\\b`, "m"))?.[1];
+    const fallback = (selector) => {
+      const sel = selector.replace(/[.[\]]/g, "\\$&");
+      return html.match(new RegExp(`^\\s*${sel}\\s*\\{[^}]*?color:\\s*(#[0-9a-f]{6})\\b`, "m"))?.[1];
+    };
+    const cases = [
+      ["light", ".seo-fallback", "--text"],
+      ["light", ".seo-fallback p", "--text-soft"],
+      ["light", ".seo-fallback .muted", "--text-muted"],
+      ["dark", ':root[data-theme="dark"] .seo-fallback', "--text"],
+      ["dark", ':root[data-theme="dark"] .seo-fallback p', "--text-soft"],
+      ["dark", ':root[data-theme="dark"] .seo-fallback .muted', "--text-muted"],
+    ];
+
+    it.each(cases)("%s: `%s` is %s", (scheme, selector, name) => {
+      const expected = token(scheme, name);
+      expect(expected, `${name} not found in the ${scheme} block`).toMatch(/^#/);
+      expect(fallback(selector), `no color rule for ${selector}`).toBe(expected);
+    });
+  });
+
   it("dark tokens are keyed on data-theme, never on the OS media query", () => {
     expect(css).toContain(':root[data-theme="dark"]');
     expect(css).not.toMatch(/@media\s*\(prefers-color-scheme/);

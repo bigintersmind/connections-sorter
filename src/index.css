@@ -15,6 +15,9 @@
   --font: 'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium',
     'Helvetica Neue', Arial, sans-serif;
 
+  /* Hand-copied in four places that can't read this file: the theme-color
+     meta, the pre-paint script and the fallback <style> in index.html, and
+     THEME_COLORS in src/theme.js. theme.test.js pins every copy to these. */
   --bg: #f1efe5;
   --bg-2: #faf8f1;
 
@@ -33,6 +36,10 @@
 
   --border: #e6e2d5;
   --border-strong: #d6d1c1;
+  /* The boundary of a field you can type in, at 3:1 against both the page and
+     the field's own fill (WCAG 1.4.11) — `--border` is decoration and can't
+     carry a control's edge. */
+  --input-border: #8a8677;
 
   --selected-bg: #29251e;
   --selected-text: #fbfaf4;
@@ -50,7 +57,10 @@
   --card-shadow-hover: 0 4px 10px rgba(40, 37, 26, 0.09), 0 14px 30px rgba(40, 37, 26, 0.10);
 
   --error-bg: #fbf1ef;
-  --error-text: #c0473b;
+  /* 5.1:1 on --error-bg (and 5.6:1 on --surface, where the sheet's Reset item
+     uses it). The old #c0473b landed on 4.50:1 exactly — no margin at all for
+     a later nudge of either color. */
+  --error-text: #b53f33;
 
   /* Dimmer behind the overflow sheet and the "how this works" dialog. */
   --backdrop: rgba(28, 25, 18, 0.34);
@@ -76,6 +86,7 @@
 
   --border: #322f27;
   --border-strong: #433f33;
+  --input-border: #706b5a;
 
   --selected-bg: #f2f0e6;
   --selected-text: #1b1813;
@@ -219,10 +230,32 @@ body::before {
 }
 .icon-before { margin-right: 0.3em; }
 .icon-after { margin-left: 0.3em; }
+/* The manual screen's Use-these-words / Back pair. Only their colors are
+   here (layout is inline in App.jsx's styles.btnPrimary / btnSecondary),
+   because a background set inline would outrank the :hover rules below —
+   which is exactly how both hovers used to change nothing. */
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-text);
+  border: none;
+}
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
 @media (hover: hover) {
   .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
-  .btn-secondary:not(:disabled):hover { border-color: var(--border-strong); }
-  .small-btn:not(:disabled):hover { border-color: var(--border-strong); }
+  /* Shuffle, the overflow trigger, Retry and Back all rest on --border-strong,
+     so the old hover re-set the border they already had and nothing moved
+     (Back's inline background hid the rule entirely — see .btn-secondary).
+     Tint the fill and darken the edge instead — --text-faint is allowed here
+     because a hover border is decoration, not text or a state. */
+  .btn-secondary:not(:disabled):hover,
+  .small-btn:not(:disabled):hover {
+    background: var(--bg-2);
+    border-color: var(--text-faint);
+  }
   .ghost-btn:not(:disabled):hover { color: var(--text); }
   .footer-link:hover { text-decoration: underline; }
 }
@@ -313,6 +346,12 @@ textarea:focus-visible {
 /* The segments sit inside a pill with 2px of padding, so a 2px-offset ring
    would spill over the group's border — tuck it in. */
 .seg:focus-visible { outline-offset: -1px; }
+/* Same idea for the sheet's full-width rows: at 100% of the dialog an outset
+   ring hangs off both sides — off-screen on a phone, so the top and bottom
+   edges read as two heavy dividers, and past the card's rounded corners on
+   desktop. Inside the row it reads as the rectangle it is. */
+.sheet-item:focus-visible,
+.sheet-close:focus-visible { outline-offset: -3px; }
 
 /* ------------------------- Segmented controls -----------------------------
    The Today / Yesterday / weekday (/ Custom) switcher in the board header, and
