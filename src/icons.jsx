@@ -1,10 +1,10 @@
 // The app's six icons, drawn inline so they come from the same place on every
-// platform. They used to be text characters (⋯ ✕ ✓ ○ ↑ ↗) — Libre Franklin
-// doesn't carry most of those code points, so each rendered from whatever
-// font the OS fell back to, with its own weight and baseline: the check in a
-// locked chip sat visibly heavier than the label beside it, and Android and
-// Windows picked different fallbacks again. An SVG is the same 16-unit
-// drawing everywhere.
+// platform. They started as text characters (⋯ ✕ ↑ ↗, and the lock chip's
+// ✓ ○ before the two padlocks replaced that pair) — Libre Franklin doesn't
+// carry most of those code points, so each rendered from whatever font the OS
+// fell back to, with its own weight and baseline: the check in a locked chip
+// sat visibly heavier than the label beside it, and Android and Windows picked
+// different fallbacks again. An SVG is the same 16-unit drawing everywhere.
 //
 // Each is 1em square and drawn in `currentColor`, so it takes the size and
 // color of the text it sits in, and each is `aria-hidden`: every one of them
@@ -62,20 +62,25 @@ export function CloseIcon(props) {
   );
 }
 
-/** A check: the row is locked. */
-export function CheckIcon(props) {
+/** A closed padlock: the row is locked. */
+export function LockIcon(props) {
   return (
     <Icon {...props}>
-      <path d="M3 8.5l3.5 3.5L13 4.5" {...STROKE} />
+      <rect x="3" y="7.5" width="10" height="6.5" rx="1.5" {...STROKE} />
+      <path d="M5.5 7.5V5.25a2.5 2.5 0 0 1 5 0V7.5" {...STROKE} />
     </Icon>
   );
 }
 
-/** An empty ring: the row is not locked yet. */
-export function CircleIcon(props) {
+/** An open padlock: the row is not locked yet. The same arch as LockIcon's,
+ *  lifted a unit, with its free leg stopping at the top of the arc instead of
+ *  reaching the body — at 15px it is the gap under that leg, and the two legs
+ *  no longer matching, that read as "open". */
+export function LockOpenIcon(props) {
   return (
     <Icon {...props}>
-      <circle cx="8" cy="8" r="5" {...STROKE} />
+      <rect x="3" y="7.5" width="10" height="6.5" rx="1.5" {...STROKE} />
+      <path d="M5.5 7.5V4.25a2.5 2.5 0 0 1 5 0" {...STROKE} />
     </Icon>
   );
 }

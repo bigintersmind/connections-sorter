@@ -13,8 +13,7 @@ The app opens straight onto today's puzzle — the words load automatically, no 
 On the board:
 
 - Tap two tiles to swap them, or drag one tile onto another
-- Tap a colored row label to lock it in once you're confident in that grouping
-- Optionally type a category guess into each row's label field
+- Tap a row's padlock to lock that grouping in once you're confident in it
 - Shuffle randomizes any unlocked rows
 
 Behind the overflow button (⋯) in the header:
@@ -24,7 +23,7 @@ Behind the overflow button (⋯) in the header:
 - **How this works** — a short explainer
 - **Share this site** — sends a link through your device's share sheet, or copies it
 - **Play the official game** — a link back to NYT
-- **Reset board** — clears your locks and labels for the day you're on
+- **Reset board** — unlocks every row of the day you're on
 
 Each day's board persists to `localStorage` separately, so you can close the tab and pick up where you left off.
 

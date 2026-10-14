@@ -61,6 +61,14 @@
      the field's own fill (WCAG 1.4.11) — `--border` and `--border-strong` are
      hairlines and bordered-button edges, never a field's. */
   --input-border: #8a8677;
+  /* How much of its pastel a row's name strip wears while the row is
+     unlocked: a tint that names the row without claiming it is locked (the
+     full pastel means that). .row-name mixes it with transparent, so it sits
+     over the page's glow like any other translucent fill. Lower in dark: the
+     four pastels are all light, and over near-black a stronger mix goes
+     muddy and costs the name its 4.5:1 — theme.test.js recomputes --text-soft
+     on each tint, over both --bg and --bg-2, in both schemes. */
+  --row-tint: 36%;
 
   --selected-bg: #29251e;
   --selected-text: #fbfaf4;
@@ -108,6 +116,7 @@
   --border: #322f27;
   --border-strong: #433f33;
   --input-border: #706b5a;
+  --row-tint: 24%;
 
   --selected-bg: #f2f0e6;
   --selected-text: #1b1813;
@@ -208,11 +217,72 @@ body::before {
 }
 .btn:not(:disabled):active { transform: translateY(1px); }
 
-/* The row's category field. Only its colors change (it takes the row's tint
-   once locked), and they live inline in App.jsx — but the transition belongs
+/* Each row's control line: a padlock and, beside it, the row's colour name on
+   a strip of its pastel. Styled here rather than inline, like .small-btn,
+   because the padlock needs a hover and an inline background would outrank
+   it. The row's pastel reaches both through two custom properties the row's
+   group div sets inline from ROW_COLORS in App.jsx (--row-color, --row-text),
+   so the four pastels are still written in exactly one place. The padlock
+   also carries `.btn` for its transition and press nudge. */
+.lock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  /* The target-size floor, square: the 15px icon plus 6px of side padding and
+     the border comes to 29px, so the width rides on the floor too. */
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 6px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .lock-btn:hover {
+    background: var(--bg-2);
+    border-color: var(--text-faint);
+    color: var(--text);
+  }
+}
+/* Locked: the row's pastel. After the hover rule, at the same specificity, so
+   a hovered locked padlock keeps its fill. */
+.lock-btn[aria-pressed="true"] {
+  background: var(--row-color);
+  color: var(--row-text);
+  border-color: var(--row-color);
+}
+
+/* The name strip fills the rest of the line and is read-only — the padlock is
+   the only control on it. Unlocked it wears the pastel at --row-tint with the
+   name in --text-soft; locked it takes the full pastel and the pastel's dark
+   text, and the name's weight steps up, which with the padlock closing and
+   the tiles turning is the whole visual of "locked". The transition lives
    here so the reduced-motion block can reach it. */
-.label-input {
-  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+.row-name {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--row-color) var(--row-tint), transparent);
+  color: var(--text-soft);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.15;
+  white-space: nowrap;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.row-name-locked {
+  background: var(--row-color);
+  color: var(--row-text);
+  font-weight: 700;
 }
 
 /* The compact bordered button: Shuffle and the overflow trigger in the board
@@ -425,10 +495,9 @@ button:disabled { cursor: not-allowed; }
    ghost treatment has no border or fill to grey out, so fade it. */
 .ghost-btn:disabled { opacity: 0.5; }
 
-/* The board label inputs and manual-entry textarea read as real fields, not
-   pre-filled content — placeholders stay lighter than a typed value, but at a
-   readable weight of gray: they carry the only hint of what the field wants. */
-input::placeholder,
+/* The manual-entry textarea reads as a real field, not pre-filled content —
+   its placeholder stays lighter than a typed value, but at a readable weight
+   of gray: it carries the only hint of what the field wants. */
 textarea::placeholder {
   color: var(--text-muted);
   opacity: 1;
@@ -728,8 +797,8 @@ textarea:focus-visible {
    both `scale(1)`, so removing it leaves the tile exactly where it ends up
    anyway. The four selectors below are every transition in the app that has
    anything to drop — every `transition` declaration lives in this file, so
-   none escapes inline (the lock button carries `className="btn"` and takes
-   `.btn`'s), and the only two not listed are `.tile-dragging` and
+   none escapes inline (the padlock carries `className="btn lock-btn"` and
+   takes `.btn`'s), and the only two not listed are `.tile-dragging` and
    `.tile-seeded`, which already set `transition: none` for everyone — the
    first so a carried tile can keep up with the pointer, the second so the
    frame that re-seats a dropped swap doesn't animate. What follows that frame
@@ -758,5 +827,5 @@ textarea:focus-visible {
   .btn,
   .tile,
   .seg,
-  .label-input { transition: none; }
+  .row-name { transition: none; }
 }

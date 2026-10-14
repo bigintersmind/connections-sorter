@@ -161,20 +161,20 @@ describe("index.html and index.css agree with theme.js", () => {
 // --surface is 3.09), so a nudge of either color — or of the fill behind it —
 // can drop below the floor without looking any different. These recompute the
 // ratios from the tokens themselves rather than trusting the comments.
-describe("the tokens hold the contrast their comments promise", () => {
-  // WCAG relative luminance: sRGB channel → linear, weighted 0.2126/0.7152/
-  // 0.0722; the ratio is (lighter + 0.05) / (darker + 0.05).
-  const luminance = (hex) => {
-    const [r, g, b] = [1, 3, 5]
-      .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  };
-  const contrast = (a, b) => {
-    const [lighter, darker] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-    return (lighter + 0.05) / (darker + 0.05);
-  };
+// WCAG relative luminance: sRGB channel → linear, weighted 0.2126/0.7152/
+// 0.0722; the ratio is (lighter + 0.05) / (darker + 0.05).
+const luminance = (hex) => {
+  const [r, g, b] = [1, 3, 5]
+    .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a, b) => {
+  const [lighter, darker] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (lighter + 0.05) / (darker + 0.05);
+};
 
+describe("the tokens hold the contrast their comments promise", () => {
   const cases = [
     ["--input-border", "--bg", 3],
     ["--input-border", "--input-bg", 3],
@@ -190,6 +190,58 @@ describe("the tokens hold the contrast their comments promise", () => {
     const ratio = contrast(fg, bg);
     const detail = `${name} on ${against} (${scheme}) is ${ratio.toFixed(2)}:1`;
     expect(ratio, detail).toBeGreaterThanOrEqual(floor);
+  });
+});
+
+// The row name strips (.row-name in index.css): the colour name sits in
+// --text-soft on its pastel at --row-tint — a translucent fill over the page,
+// which is a --bg-2 → --bg glow, so both ends count — and, once the row is
+// locked, in ROW_COLORS' dark text on the full pastel. Running text, so 4.5:1.
+// ROW_COLORS lives in App.jsx, which renders JSX and isn't a Vitest module, so
+// the pastels here are DESIGN.md's `row-*` copies of it — which this also
+// keeps honest against the tint: lighten a pastel in one place and not the
+// other and the ratio moves.
+describe("the row name reads on its strip", () => {
+  const pastels = [...design.matchAll(/^\s+row-(yellow|green|blue|purple):\s*"(#[0-9a-f]{6})"/gm)]
+    .map(([, name, hex]) => [name, hex]);
+  const rowText = design.match(/^\s+row-text:\s*"(#[0-9a-f]{6})"/m)?.[1];
+  const tint = (scheme) => {
+    const pct = blocks[scheme].match(/^\s*--row-tint:\s*(\d+(?:\.\d+)?)%/m)?.[1];
+    return pct === undefined ? undefined : Number(pct) / 100;
+  };
+
+  // Source-over compositing of `fg` at `alpha` on an opaque `bg`, per sRGB
+  // channel — what the browser does with the translucent strip.
+  const over = (fg, alpha, bg) => {
+    const ch = (hex, i) => parseInt(hex.slice(i, i + 2), 16);
+    const mixed = [1, 3, 5].map((i) => Math.round(ch(fg, i) * alpha + ch(bg, i) * (1 - alpha)));
+    return `#${mixed.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+  };
+
+  it("finds the pastels, their text and the tint", () => {
+    expect(pastels).toHaveLength(4);
+    expect(rowText).toMatch(/^#/);
+    expect(tint("light")).toBeGreaterThan(0);
+    expect(tint("dark")).toBeGreaterThan(0);
+  });
+
+  const unlocked = ["light", "dark"].flatMap((scheme) =>
+    pastels.flatMap(([name, hex]) => [
+      ["--bg", scheme, name, hex],
+      ["--bg-2", scheme, name, hex],
+    ]),
+  );
+
+  it.each(unlocked)("over %s, %s: --text-soft on the %s tint clears 4.5:1", (page, scheme, name, hex) => {
+    const strip = over(hex, tint(scheme), token(scheme, page));
+    const ratio = contrast(token(scheme, "--text-soft"), strip);
+    const detail = `--text-soft on ${name} at --row-tint over ${page} (${scheme}) is ${ratio.toFixed(2)}:1`;
+    expect(ratio, detail).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(pastels)("locked: row-text on the full %s pastel clears 4.5:1", (name, hex) => {
+    const ratio = contrast(rowText, hex);
+    expect(ratio, `row-text on ${name} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
   });
 });
 

@@ -2,10 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { fitTileFonts } from "./fitTileFont.js";
 import {
   ArrowUpIcon,
-  CheckIcon,
-  CircleIcon,
   CloseIcon,
   ExternalIcon,
+  LockIcon,
+  LockOpenIcon,
   MoreIcon,
 } from "./icons.jsx";
 import {
@@ -73,7 +73,6 @@ const CAN_NATIVE_SHARE = typeof navigator !== "undefined" && typeof navigator.sh
 // render while the board is loading.
 const NO_TILES = [];
 const NO_LOCKS = [false, false, false, false];
-const NO_LABELS = ["", "", "", ""];
 
 function parseTiles(text) {
   if (!text) return null;
@@ -201,8 +200,8 @@ export default function ConnectionsOrganizer() {
     return { initialStore: saved ?? emptyStore(), launch: decideLaunch(saved, todayISO) };
   });
 
-  // The one source of truth for the board: tiles, locks and labels are DERIVED
-  // from the active board below, never mirrored into their own state. Every
+  // The one source of truth for the board: tiles and locks are DERIVED from
+  // the active board below, never mirrored into their own state. Every
   // play action writes through the store (updateActive/resetActive), so
   // switching days can't strand half of a board's state behind.
   const [store, setStore] = useState(initialStore);
@@ -289,7 +288,6 @@ export default function ConnectionsOrganizer() {
   const board = launching ? null : activeBoard;
   const tiles = board?.tiles ?? NO_TILES;
   const lockedRows = board?.lockedRows ?? NO_LOCKS;
-  const labels = board?.labels ?? NO_LABELS;
   const entries = switcherEntries(store, today);
 
   // Shrink-to-fit every tile's font once the board is on screen and whenever
@@ -805,16 +803,6 @@ export default function ConnectionsOrganizer() {
     });
   }, [lockedRows]);
 
-  const updateLabel = useCallback((rowIdx, val) => {
-    setStore((s) => {
-      const active = s.active && s.boards[s.active];
-      if (!active) return s;
-      const next = [...active.labels];
-      next[rowIdx] = val;
-      return updateActive(s, { labels: next });
-    });
-  }, []);
-
   const resetBoard = useCallback(() => {
     setStore(resetActive);
     setSelected(null);
@@ -1052,47 +1040,32 @@ export default function ConnectionsOrganizer() {
               const color = ROW_COLORS[rowIdx];
 
               return (
-                // Each row is a lock toggle, a label field and four tiles; the
-                // group names it so a screen reader knows which row it's in.
-                <div key={rowIdx} role="group" aria-label={`${color.name} row`}>
+                // Each row is a padlock, the row's colour name on a strip of
+                // its pastel, and four tiles; the group names it so a screen
+                // reader knows which row it's in. The padlock and the strip
+                // are styled in index.css (.lock-btn / .row-name) and take
+                // the row's pastel from the two custom properties set here,
+                // so ROW_COLORS stays the one place the pastels are written.
+                <div
+                  key={rowIdx}
+                  role="group"
+                  aria-label={`${color.name} row`}
+                  style={{ "--row-color": color.bg, "--row-text": color.text }}
+                >
                   <div style={styles.rowControl}>
                     <button
-                      className="btn"
-                      style={{
-                        ...styles.lockBtn,
-                        background: locked ? color.bg : "transparent",
-                        color: locked ? color.text : "var(--text-muted)",
-                        borderColor: locked ? color.bg : "var(--border-strong)",
-                        fontWeight: locked ? 800 : 600,
-                      }}
+                      className="btn lock-btn"
                       aria-pressed={locked}
                       aria-label={`Lock ${color.name} row`}
                       onClick={() => toggleLock(rowIdx)}
                     >
-                      {/* The icon restates aria-pressed, and the aria-label
-                          above already names the row, so it stays hidden. */}
-                      {locked ? (
-                        <CheckIcon className="icon-before" />
-                      ) : (
-                        <CircleIcon className="icon-before" />
-                      )}
-                      {color.name}
+                      {/* The padlock restates aria-pressed, and the aria-label
+                          above says what the button does, so it stays hidden. */}
+                      {locked ? <LockIcon /> : <LockOpenIcon />}
                     </button>
-                    <input
-                      className="label-input"
-                      style={{
-                        ...styles.labelInput,
-                        borderColor: locked ? `${color.bg}aa` : "var(--input-border)",
-                        background: locked ? `${color.bg}22` : "var(--input-bg)",
-                        // Once locked, the row is settled — let its label recede so
-                        // the lock button + colored tiles carry the row.
-                        color: locked ? "var(--text-soft)" : "var(--text)",
-                      }}
-                      placeholder="Category label…"
-                      aria-label={`${color.name} row label`}
-                      value={labels[rowIdx]}
-                      onChange={(e) => updateLabel(rowIdx, e.target.value)}
-                    />
+                    <div className={locked ? "row-name row-name-locked" : "row-name"}>
+                      {color.name}
+                    </div>
                   </div>
 
                   <div style={styles.tileRow}>
@@ -1431,7 +1404,7 @@ export default function ConnectionsOrganizer() {
             disabled={!board}
           >
             Reset board
-            <span className="sheet-hint">Clears locks and labels</span>
+            <span className="sheet-hint">Unlocks all four rows</span>
           </button>
         </div>
         <button className="sheet-close" onClick={closeOverflow}>Cancel</button>
@@ -1453,7 +1426,7 @@ export default function ConnectionsOrganizer() {
           <ol style={styles.howList}>
             <li>Today's words load automatically. Switch to yesterday's or the day before from the header.</li>
             <li>Tap two tiles to swap them, or drag one onto another. Group words you think share a category into the same row.</li>
-            <li>Lock rows you're confident in, then enter your guesses on the official NYT game.</li>
+            <li>Tap a row's padlock to lock in a group you're sure of, then enter your guesses on the official NYT game.</li>
           </ol>
           <p style={styles.howNote}>
             Nothing leaves your device except the request for the day's words.
@@ -1583,33 +1556,9 @@ const styles = {
     gap: 8,
     marginBottom: 6,
   },
-  lockBtn: {
-    fontSize: "var(--fs-xs)",
-    // A target-size floor that doesn't depend on the font's line box, shared
-    // with the label input beside it so the row reads as one line. The
-    // line-height (the tile's) keeps the floor in charge: at the font's
-    // normal leading a 12px label plus the padding and border overruns 30,
-    // and every row would grow with it.
-    lineHeight: 1.15,
-    minHeight: 30,
-    padding: "7px 10px",
-    borderRadius: "var(--r-sm)",
-    border: "1px solid",
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-    fontFamily: "var(--font)",
-    fontWeight: 600,
-  },
-  labelInput: {
-    flex: 1,
-    fontSize: "var(--fs-sm)",
-    minHeight: 30,
-    padding: "6px 10px",
-    border: "1px solid",
-    borderRadius: "var(--r-sm)",
-    fontFamily: "var(--font)",
-    color: "var(--text)",
-  },
+  // The padlock and the name strip inside it are .lock-btn / .row-name in
+  // index.css (they need a hover and read the row's pastel from custom
+  // properties the row's group sets).
   tileRow: {
     display: "grid",
     // minmax(0, 1fr), not 1fr: a 1fr track's min size is its content's
