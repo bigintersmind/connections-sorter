@@ -144,6 +144,19 @@ function possessiveDay(key, todayISO) {
   return `${weekday}'s`;
 }
 
+// The swap note that follows `prev` (see swapNote), built so a repeat is still
+// spoken. The id re-keys the spoken span, so every note is a new node, which
+// is what NVDA in Chrome needs. VoiceOver drops an announcement whose text
+// equals the last one however the DOM changed, so a note that would repeat
+// the last one's words (a drag straight back) gets a trailing no-break space.
+// That toggles rather than piles up: a third identical note compares against
+// the spaced one, differs, and goes back to plain.
+const nextSwapNote = (prev, key, text) => ({
+  key,
+  text: prev?.text === text ? `${text}\u00a0` : text,
+  id: (prev?.id ?? 0) + 1,
+});
+
 // The Appearance preference. <html data-theme> always holds the *resolved*
 // scheme: the pre-paint script in index.html stamps it before the first frame,
 // and this hook owns it from then on — re-stamping when the preference changes
@@ -228,16 +241,17 @@ export default function ConnectionsOrganizer() {
   // when a board is on screen, or inside the empty state when there is none.
   const [loadError, setLoadError] = useState(null);
   const [selected, setSelected] = useState(null);
-  // The last swap in words, for a screen reader: { key, text, id }. A
-  // keyboard swap leaves focus on a tile whose word has just changed and
-  // nothing else says so, so the hint's live region speaks it (#32). Keyed to
-  // the board it happened on, so a tap swap whose 200ms commit lands after a
-  // day switch never speaks over the new board. Cleared when a tile is picked
-  // up by tap, a shuffle moves the words, or a board lands (which also keeps
-  // a late note off the old board after a switch back); a committed drag
-  // replaces it. `id` re-keys the spoken span, so a note repeating the last
-  // one's words (a drag straight back) is still a new node and still
-  // announced.
+  // The last swap in words, for a screen reader: { key, text, id }. Every
+  // swap writes one, tap or drag, and the hint's live region speaks it (#32).
+  // A keyboard swap is why: it leaves focus on a tile whose word has just
+  // changed, and nothing else says so. Keyed to the board it happened on, so
+  // a tap swap whose 200ms commit lands after a day switch never speaks over
+  // the new board. Cleared when a tile is picked up by tap, a shuffle moves
+  // the words, or a board lands (which also keeps a late note off the old
+  // board after a switch back); a committed drag replaces it. Built by
+  // nextSwapNote: `id` re-keys the spoken span and the text toggles a
+  // trailing no-break space, so a note repeating the last one's words (a drag
+  // straight back) is both a new node and new text, and still announced.
   const [swapNote, setSwapNote] = useState(null);
   const [flashRow, setFlashRow] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
@@ -452,13 +466,19 @@ export default function ConnectionsOrganizer() {
     fetchAbortRef.current?.abort(SUPERSEDED);
   }, []);
 
-  // A Retry that lands unmounts the failure notice, and the button with it,
-  // dropping focus to <body>. Hand it to More first: it sits just before the
-  // notice, so the next Tab reaches the board as it would have from the
-  // notice (#32). Only when focus is in the notice: landed() calls this on
-  // every path a board arrives by, and unguarded it would pull focus off the
-  // day segment just pressed, or onto More at launch so the first Tab skipped
-  // Today (#10).
+  // A board that lands clears the failure notice, and if focus was in it — on
+  // the Retry whose load this is, or tabbed there while some other load ran —
+  // the focused button unmounts with it and focus drops to <body>. Hand it to
+  // More first: it sits just before the notice, so the next Tab reaches the
+  // board as it would have from the notice (#32). Only when focus is in the
+  // notice: landed() calls this on every path a board arrives by, and
+  // unguarded it would pull focus off the day segment just pressed, or onto
+  // More at launch so the first Tab skipped Today (#10). The notice's Retry
+  // focuses itself on press, so a pointer press in Safari, which never focuses
+  // a button (on iOS, a VoiceOver double-tap included), still counts. Accepted:
+  // an iOS VoiceOver user who swipes away while the load runs is still moved
+  // to More when it lands, because a swipe moves the VoiceOver cursor, not DOM
+  // focus.
   const moveFocusOffNotice = useCallback(() => {
     if (noticeRef.current?.contains(document.activeElement)) moreBtnRef.current?.focus();
   }, []);
@@ -620,11 +640,9 @@ export default function ConnectionsOrganizer() {
       setSwapAnim({ a: selected, b: index });
       setTimeout(() => {
         commitSwap(selected, index, activeKey);
-        setSwapNote((prev) => ({
-          key: activeKey,
-          text: `Swapped ${tiles[selected]} with ${tiles[index]}`,
-          id: (prev?.id ?? 0) + 1,
-        }));
+        setSwapNote((prev) =>
+          nextSwapNote(prev, activeKey, `Swapped ${tiles[selected]} with ${tiles[index]}.`),
+        );
         setSwapAnim(null);
         setSelected(null);
       }, 200);
@@ -725,11 +743,9 @@ export default function ConnectionsOrganizer() {
     // tile picked up earlier by tap stays picked up.
     if (over === null) return;
     commitSwap(press.from, over, press.key);
-    setSwapNote((prev) => ({
-      key: press.key,
-      text: `Swapped ${tiles[press.from]} with ${tiles[over]}`,
-      id: (prev?.id ?? 0) + 1,
-    }));
+    setSwapNote((prev) =>
+      nextSwapNote(prev, press.key, `Swapped ${tiles[press.from]} with ${tiles[over]}.`),
+    );
     // Seed the settle in the SAME handler as the swap, so React batches the
     // two into one commit: the frame that swaps the words is the frame that
     // puts each tile back where its new word already was, and the player sees
@@ -1076,12 +1092,16 @@ export default function ConnectionsOrganizer() {
           <div ref={noticeRef} className="notice" style={styles.notice}>
             <span>{loadError.message}</span>
             {/* aria-disabled rather than disabled while a load runs, so a
-                keyboard press keeps its focus here (see .ghost-btn in
-                index.css). aria-disabled doesn't stop a click, so the
-                onClick checks fetchingKey itself. */}
+                keyboard press keeps its focus here (see
+                .ghost-btn[aria-disabled="true"] in index.css, which also
+                fades it). aria-disabled doesn't stop a click, so the onClick
+                checks fetchingKey itself. It focuses itself first: Safari
+                doesn't focus a pressed button, on a Mac or on iOS, and
+                without focus in the notice moveFocusOffNotice's guard would
+                skip the hand-off to More when the load lands. */}
             <button
               className="ghost-btn ghost-btn-action"
-              onClick={() => { if (fetchingKey === null) loadDay(loadError.key); }}
+              onClick={(e) => { e.currentTarget.focus(); if (fetchingKey === null) loadDay(loadError.key); }}
               aria-disabled={fetchingKey !== null}
             >
               Retry
@@ -1382,11 +1402,12 @@ export default function ConnectionsOrganizer() {
         {/* Always rendered, for the same reason: the hint flips to the swap
             instruction the moment a tile is picked up, and that flip is only
             announced if the region was already there. It also speaks a swap,
-            ahead of the resting instruction it flips back to, rather than the
-            status above: that one carries a failed load for as long as the
-            notice shows, so a swap there would either have to wait for the
-            failure to clear or read the failure out again with it. Atomic so
-            the two sentences are read as one. */}
+            ahead of the resting instruction (which a tap swap flips back to
+            and a drag leaves in place), rather than the status above: that
+            one carries a failed load for as long as the notice shows, so a
+            swap there would either have to wait for the failure to clear or
+            read the failure out again with it. Atomic so the two sentences
+            are read as one. */}
         <p style={styles.boardHint} aria-live="polite" aria-atomic="true">
           {!board ? (
             ""
@@ -1403,7 +1424,7 @@ export default function ConnectionsOrganizer() {
               {/* Spoken, not shown: a sighted player watches the two tiles
                   trade places. */}
               {swapNote && swapNote.key === activeKey && (
-                <span key={swapNote.id} className="sr-only">{swapNote.text}. </span>
+                <span key={swapNote.id} className="sr-only">{swapNote.text} </span>
               )}
               Tap a tile to select, then another to swap
             </>
