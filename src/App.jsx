@@ -1113,8 +1113,13 @@ export default function ConnectionsOrganizer() {
                       // was wearing, so that frame changes nothing on screen.
                       // Colors flow through CSS
                       // vars so the board tracks the light/dark theme
-                      // automatically.
+                      // automatically — and forced colours, where index.css
+                      // points the --selected-* tokens at system colours.
                       let bg, fg, borderColor, boxShadow;
+                      // Which of the looks below index.css's forced-colours
+                      // block has to reach: the --selected-* fill, and the
+                      // drop target's ring (.tile-selected / .tile-target).
+                      let selectedFill = false, targetRing = false;
                       if (locked) {
                         bg = color.bg;
                         fg = color.text;
@@ -1142,11 +1147,13 @@ export default function ConnectionsOrganizer() {
                         // dark blob. This one cuts the carried tile out of
                         // whatever it's over.
                         boxShadow = "0 0 0 2.5px var(--selected-text), var(--selected-shadow)";
+                        selectedFill = true;
                       } else if (isSelected) {
                         bg = "var(--selected-bg)";
                         fg = "var(--selected-text)";
                         borderColor = "transparent";
                         boxShadow = "0 0 0 2.5px var(--selected-ring), var(--selected-shadow)";
+                        selectedFill = true;
                       } else if (isDropTarget || (isSeeded && isDisplaced)) {
                         // …and the displaced tile stands in for the drop
                         // target, ring and all.
@@ -1154,6 +1161,7 @@ export default function ConnectionsOrganizer() {
                         fg = "var(--tile-text)";
                         borderColor = "transparent";
                         boxShadow = "0 0 0 3px var(--selected-ring), var(--tile-shadow)";
+                        targetRing = true;
                       } else {
                         bg = "var(--tile-bg)";
                         fg = "var(--tile-text)";
@@ -1206,6 +1214,8 @@ export default function ConnectionsOrganizer() {
                               isSeeded && "tile-seeded",
                               isCrossing && "tile-crossing",
                               isArriving && "tile-arriving",
+                              selectedFill && "tile-selected",
+                              targetRing && "tile-target",
                             ].filter(Boolean).join(" ")}
                             ref={el => (tileRefs.current[idx] = el)}
                             // Still just the tap state: a drag is a gesture in
@@ -1270,7 +1280,7 @@ export default function ConnectionsOrganizer() {
               </>
             ) : (
               <>
-                <div style={styles.spinner} aria-hidden="true" />
+                <div className="spinner" aria-hidden="true" />
                 <p style={styles.emptyText} role="status">
                   Loading {loadingDay ?? "today's"} puzzle…
                 </p>
@@ -1548,14 +1558,6 @@ const styles = {
     fontSize: "var(--fs-md)",
     color: "var(--text-muted)",
     margin: 0,
-  },
-  spinner: {
-    width: 34,
-    height: 34,
-    borderRadius: "50%",
-    border: "3px solid var(--border)",
-    borderTopColor: "var(--text)",
-    animation: "spin 0.8s linear infinite",
   },
   // A row's lock line is .row-line / .row-lock / .row-name in index.css (it
   // needs a hover, a button reset, and the row's pastel from custom properties

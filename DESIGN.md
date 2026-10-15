@@ -328,6 +328,9 @@ Six inline SVGs in `src/icons.jsx` — more, close, lock, lock-open, arrow-up, e
 ### Focus
 One ring for everything: `3px solid var(--focus-ring)` at a 2 px offset on any focused button, link or field. It tucks inside two things that would otherwise spill: segments (offset −1 px, inside the pill's padding) and sheet rows (offset −3 px, since a full-width row's outset ring hangs off both sides of the dialog).
 
+### Forced colours
+Under `forced-colors: active` (Windows High Contrast) the user's palette replaces every colour and drops every shadow, so each state is redrawn in system colours, in one block at the end of `index.css`; none of it applies outside forced colours. Selected is a `Highlight` fill with `HighlightText` — the pressed segment, and the picked-up and carried tile — and those opt out of forcing (`forced-color-adjust: none`), because Chrome paints a `Canvas` backplate behind forced text that blanks `HighlightText` out, and lay the fill on `Canvas`, because Chrome's `Highlight` is translucent and a carried tile would show the word beneath it. A locked row's tiles go to `GrayText`, text and edge, the way the palette draws a disabled button. The drop target's ring becomes a 3 px `Highlight` outline. The saved-day dot is `ButtonText`, and each spinner hides its track in `Canvas` so only the arc turns. The focus ring is `CanvasText`, and inset in `HighlightText` on a pressed segment, so it never merges with a `Highlight` fill.
+
 ### Motion
 Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 0.12 s and colour, background, border, shadow and opacity in 0.2 s; tiles ease transform in 0.15 s and shadow in 0.3 s; segments in 0.18 s; a row's name strip eases background and colour in 0.2 s as it fills on a lock, and its padlock box eases background, edge and colour in 0.2 s alongside. A carried tile drops its transition so it can keep up with the finger, and the single re-seat frame that starts a settle drops it for the same reason: nothing there is meant to move. Under `prefers-reduced-motion: reduce` the three entrances and the lock pop are set to `animation: none` and the five transitions to `none`, one selector each — and a dropped swap is not seeded at all there: with the tile transition off, the drop's own frame lands both tiles at rest in their new cells; the two spinners keep turning, because a small rotating ring is the only sign a fetch is in flight and is not vestibular motion.
 
@@ -339,6 +342,7 @@ Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 
 - **Do** put a `min-height` (30 px for row controls, 36 px for header buttons, 32 × 32 for ghost buttons) on any new control rather than padding it up to size.
 - **Do** put hover, focus, media queries, keyframes and transitions in `index.css` behind a `className`; gate hover behind `(hover: hover)`, and decide per animation what reduced motion drops.
 - **Do** carry state on `aria-pressed` / `aria-disabled` and hide the icon that restates it; keep the ring-and-drop treatment for picked-up, carried and drop-target tiles only.
+- **Do** look at any new state under DevTools → Rendering → `forced-colors: active`. A state that is only a fill or a shadow disappears there and needs a line in the forced-colours block.
 
 ### Don't:
 - **Don't** use the four pastels for anything but a row's name strip (at `--row-tint`) and a locked row (at full strength) — the four dots heading "How this works" are the one decorative exception — and don't theme them.
