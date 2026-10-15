@@ -1624,7 +1624,6 @@ const styles = {
   },
   footerLink: {
     color: "var(--text-muted)",
-    textDecoration: "none",
     whiteSpace: "nowrap",
   },
   howHeading: {

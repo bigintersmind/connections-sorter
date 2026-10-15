@@ -364,6 +364,10 @@ body::before {
   color: var(--text);
   border: 1px solid var(--border-strong);
 }
+/* The footer's official-game link rests without an underline. Set here, not
+   inline in styles.footerLink, for the same reason: an inline `none`
+   outranked the hover underline below (#33). */
+.footer-link { text-decoration: none; }
 @media (hover: hover) {
   .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
   /* Shuffle, the overflow trigger, Retry and Back all rest on --border-strong,

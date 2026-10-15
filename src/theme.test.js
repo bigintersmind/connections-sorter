@@ -141,6 +141,25 @@ describe("index.html and index.css agree with theme.js", () => {
     });
   });
 
+  // Its two type sizes are copies too: steps from the scale in index.css, so
+  // the fallback stays on the ramp DESIGN.md documents (#33).
+  describe("the fallback's sizes are type steps", () => {
+    const size = (selector) => {
+      const sel = selector.replace(/[.[\]]/g, "\\$&");
+      const rule = `^\\s*${sel}\\s*\\{[^}]*?(?<![-\\w])font-size:\\s*([\\d.]+px)`;
+      return html.match(new RegExp(rule, "m"))?.[1];
+    };
+    const step = (name) => css.match(new RegExp(`^\\s*${name}:\\s*([\\d.]+px)`, "m"))?.[1];
+
+    it.each([
+      [".seo-fallback h1", "--fs-xl"],
+      [".seo-fallback .muted", "--fs-md"],
+    ])("`%s` is %s", (selector, name) => {
+      expect(step(name), `${name} not found in index.css`).toMatch(/px$/);
+      expect(size(selector), `${selector}'s font-size`).toBe(step(name));
+    });
+  });
+
   it("dark tokens are keyed on data-theme, never on the OS media query", () => {
     expect(css).toContain(':root[data-theme="dark"]');
     expect(css).not.toMatch(/@media\s*\(prefers-color-scheme/);
