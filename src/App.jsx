@@ -1622,6 +1622,9 @@ const styles = {
     margin: "18px auto 0",
     maxWidth: 340,
   },
+  // No textDecoration here: the resting `none` lives in index.css
+  // (.footer-link), because an inline one outranks the :hover rule that
+  // underlines it (#33).
   footerLink: {
     color: "var(--text-muted)",
     whiteSpace: "nowrap",
