@@ -154,15 +154,9 @@ describe("index.html and index.css agree with theme.js", () => {
   });
 });
 
-// Two tokens exist *because* of a contrast number, and their comments in
-// index.css say so: --input-border is the edge of a field, which WCAG 1.4.11
-// puts at 3:1 against everything it touches, and --error-text is running text
-// at 4.5:1. Both have very little headroom in dark (--input-border on
-// --surface is 3.09), so a nudge of either color — or of the fill behind it —
-// can drop below the floor without looking any different. These recompute the
-// ratios from the tokens themselves rather than trusting the comments.
 // WCAG relative luminance: sRGB channel → linear, weighted 0.2126/0.7152/
-// 0.0722; the ratio is (lighter + 0.05) / (darker + 0.05).
+// 0.0722; the ratio is (lighter + 0.05) / (darker + 0.05). Shared by the two
+// contrast blocks below.
 const luminance = (hex) => {
   const [r, g, b] = [1, 3, 5]
     .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -174,6 +168,15 @@ const contrast = (a, b) => {
   return (lighter + 0.05) / (darker + 0.05);
 };
 
+// Two tokens exist *because* of a contrast number, and their comments in
+// index.css say so: --input-border is the edge of a field, which WCAG 1.4.11
+// puts at 3:1 against everything it touches, and --error-text is running text
+// at 4.5:1. Both have very little headroom in dark (--input-border on
+// --surface is 3.09), so a nudge of either color — or of the fill behind it —
+// can drop below the floor without looking any different. These recompute the
+// ratios from the tokens themselves rather than trusting the comments. (The
+// row name strip's --row-tint has a block of its own below: its fill is a
+// mix, not a token.)
 describe("the tokens hold the contrast their comments promise", () => {
   const cases = [
     ["--input-border", "--bg", 3],
@@ -193,18 +196,30 @@ describe("the tokens hold the contrast their comments promise", () => {
   });
 });
 
-// The row name strips (.row-name in index.css): the colour name sits in
-// --text-soft on its pastel at --row-tint — a translucent fill over the page,
-// which is a --bg-2 → --bg glow, so both ends count — and, once the row is
-// locked, in ROW_COLORS' dark text on the full pastel. Running text, so 4.5:1.
-// ROW_COLORS lives in App.jsx, which renders JSX and isn't a Vitest module, so
-// the pastels here are DESIGN.md's `row-*` copies of it — which this also
-// keeps honest against the tint: lighten a pastel in one place and not the
-// other and the ratio moves.
+// The row name strips (.row-name in index.css). Unlocked, the colour name sits
+// in --text-soft on the row's pastel mixed to --row-tint with transparent — a
+// translucent fill over the page, which is a --bg-2 → --bg glow, so both ends
+// count. Locked, it sits in the row's own text on the full pastel, as the
+// locked padlock's icon does. Running text, so 4.5:1 throughout.
+//
+// The pastels and their text come from ROW_COLORS in App.jsx, the copy that
+// renders. App.jsx renders JSX and isn't a Vitest module, so it's read as
+// text, as dragSwap.test.js reads it; the scrape is anchored on the literal's
+// own `const ROW_COLORS = [` and `];` lines, so a comment above it can't feed
+// it. A ratio computed here is only as good as its match to the CSS, so the
+// rules being modelled are pinned as well — the mix and the text color of the
+// unlocked strip, the fill and text of the locked strip and padlock, and the
+// --row-color / --row-text bridge App.jsx sets on each row. DESIGN.md's
+// `row-*` copies, which the palette check further down skips, are pinned to
+// ROW_COLORS here too.
+const app = read("./App.jsx");
+const rowColors = [
+  ...(app.match(/^const ROW_COLORS = \[\n([\s\S]*?)^\];/m)?.[1] ?? "").matchAll(
+    /name:\s*"(\w+)",\s*bg:\s*"(#[0-9a-f]{6})",\s*text:\s*"(#[0-9a-f]{6})"/g,
+  ),
+].map(([, name, bg, text]) => ({ name, bg, text }));
+
 describe("the row name reads on its strip", () => {
-  const pastels = [...design.matchAll(/^\s+row-(yellow|green|blue|purple):\s*"(#[0-9a-f]{6})"/gm)]
-    .map(([, name, hex]) => [name, hex]);
-  const rowText = design.match(/^\s+row-text:\s*"(#[0-9a-f]{6})"/m)?.[1];
   const tint = (scheme) => {
     const pct = blocks[scheme].match(/^\s*--row-tint:\s*(\d+(?:\.\d+)?)%/m)?.[1];
     return pct === undefined ? undefined : Number(pct) / 100;
@@ -218,39 +233,83 @@ describe("the row name reads on its strip", () => {
     return `#${mixed.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
   };
 
-  it("finds the pastels, their text and the tint", () => {
-    expect(pastels).toHaveLength(4);
-    expect(rowText).toMatch(/^#/);
-    expect(tint("light")).toBeGreaterThan(0);
-    expect(tint("dark")).toBeGreaterThan(0);
+  // The it.each blocks below register nothing at all for an empty list, so a
+  // scrape that stops matching would leave them green by absence. This is the
+  // test that goes red instead.
+  it("finds the four rows and both tints", () => {
+    expect(rowColors, "ROW_COLORS entries scraped from App.jsx").toHaveLength(4);
+    expect(tint("light"), "--row-tint not found in the light block").toBeGreaterThan(0);
+    expect(tint("dark"), "--row-tint not found in the dark block").toBeGreaterThan(0);
   });
 
   const unlocked = ["light", "dark"].flatMap((scheme) =>
-    pastels.flatMap(([name, hex]) => [
-      ["--bg", scheme, name, hex],
-      ["--bg-2", scheme, name, hex],
+    rowColors.flatMap(({ name, bg }) => [
+      ["--bg", scheme, name, bg],
+      ["--bg-2", scheme, name, bg],
     ]),
   );
 
-  it.each(unlocked)("over %s, %s: --text-soft on the %s tint clears 4.5:1", (page, scheme, name, hex) => {
-    const strip = over(hex, tint(scheme), token(scheme, page));
-    const ratio = contrast(token(scheme, "--text-soft"), strip);
-    const detail = `--text-soft on ${name} at --row-tint over ${page} (${scheme}) is ${ratio.toFixed(2)}:1`;
+  it.each(unlocked)("over %s, %s: --text-soft on the %s tint clears 4.5:1", (page, scheme, name, bg) => {
+    const [text, behind] = [token(scheme, "--text-soft"), token(scheme, page)];
+    expect(text, `--text-soft not found in the ${scheme} block`).toMatch(/^#/);
+    expect(behind, `${page} not found in the ${scheme} block`).toMatch(/^#/);
+    const ratio = contrast(text, over(bg, tint(scheme), behind));
+    const detail = `--text-soft on ${name} (${bg}) at --row-tint over ${page} (${scheme}) is ${ratio.toFixed(2)}:1`;
     expect(ratio, detail).toBeGreaterThanOrEqual(4.5);
   });
 
-  it.each(pastels)("locked: row-text on the full %s pastel clears 4.5:1", (name, hex) => {
-    const ratio = contrast(rowText, hex);
-    expect(ratio, `row-text on ${name} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  const locked = rowColors.map(({ name, bg, text }) => [name, text, bg]);
+
+  it.each(locked)("locked: %s's text %s on its full pastel %s clears 4.5:1", (name, text, bg) => {
+    const ratio = contrast(text, bg);
+    expect(ratio, `${name}'s text on its pastel is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // `rule` reads one rule's body by its exact selector, anchored at the start
+  // of a line so the reduced-motion block's indented `.row-name` and a mention
+  // in a comment can't stand in for it; a rule that's gone reads as "", which
+  // every assertion below fails on. `decl` takes a property only where it
+  // starts a declaration, so `border-color:` is never read as `color:`.
+  const rule = (sel) =>
+    css.match(new RegExp(`^${sel.replace(/[.[\]]/g, "\\$&")}\\s*\\{([^}]*)\\}`, "m"))?.[1] ?? "";
+  const decl = (body, prop) =>
+    body.match(new RegExp(`(?<![-\\w])${prop}:\\s*([^;]+);`))?.[1].replace(/\s+/g, " ").trim();
+
+  it("models the rules index.css and App.jsx actually set", () => {
+    const strip = rule(".row-name");
+    expect(decl(strip, "background"), ".row-name's background").toBe(
+      "color-mix(in srgb, var(--row-color) var(--row-tint), transparent)",
+    );
+    expect(decl(strip, "color"), ".row-name's color").toBe("var(--text-soft)");
+    for (const sel of [".row-name-locked", '.lock-btn[aria-pressed="true"]']) {
+      expect(decl(rule(sel), "background"), `${sel}'s background`).toBe("var(--row-color)");
+      expect(decl(rule(sel), "color"), `${sel}'s color`).toBe("var(--row-text)");
+    }
+    expect(app, "App.jsx no longer sets --row-color / --row-text from ROW_COLORS").toContain(
+      '"--row-color": color.bg, "--row-text": color.text',
+    );
+  });
+
+  // DESIGN.md has one `row-text` for all four rows, because ROW_COLORS gives
+  // every row the same near-black today. Each row's text is held to it, so a
+  // row that ever takes a text of its own fails here until DESIGN.md says so.
+  const designRow = (key) =>
+    design.match(new RegExp(`^\\s+row-${key}:\\s*"(#[0-9a-f]{6})"`, "m"))?.[1];
+  const copies = rowColors.map(({ name, bg, text }) => [name.toLowerCase(), name, bg, text]);
+
+  it.each(copies)("DESIGN.md's row-%s and row-text are %s's pastel and text", (key, name, bg, text) => {
+    expect(designRow(key), `DESIGN.md's row-${key} is not ROW_COLORS' ${name} bg`).toBe(bg);
+    expect(designRow("text"), `DESIGN.md's row-text is not ROW_COLORS' ${name} text`).toBe(text);
   });
 });
 
 // DESIGN.md's frontmatter is the designer-facing copy of the palette — the one
 // place that restates every token by hand, for whoever designs the next piece
 // of UI — and nothing else keeps it honest. `foo-dark` is the dark block's
-// `--foo`; `foo` is the light block's. The `row-*` entries are skipped (they
-// are the four puzzle pastels from ROW_COLORS in App.jsx, not CSS tokens at
-// all) and so are the two `backdrop` values, which are rgba() rather than hex.
+// `--foo`; `foo` is the light block's. The `row-*` entries are skipped here
+// (they are the four puzzle pastels from ROW_COLORS in App.jsx, not CSS tokens
+// at all — the row-name block above pins them to ROW_COLORS instead) and so
+// are the two `backdrop` values, which are rgba() rather than hex.
 describe("DESIGN.md's palette is index.css's tokens", () => {
   const block = design.match(/^colors:\n((?:[ \t]+.*\n)+)/m)?.[1] ?? "";
   const entries = [...block.matchAll(/^\s+([\w-]+):\s*"(#[0-9a-f]{6})"/gm)]

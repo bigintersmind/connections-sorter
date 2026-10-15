@@ -45,6 +45,10 @@ import {
   updateActive,
 } from "./savedPuzzle.js";
 
+// theme.test.js reads this literal as text for the row name's contrast checks
+// and pins DESIGN.md's `row-*` copies to it, so keep its shape: `[` ending the
+// first line, `];` starting the last, and each entry opening with `name`, `bg`
+// and `text` in that order.
 const ROW_COLORS = [
   { name: "Yellow", bg: "#f9df6d", text: "#1a1a1a", glow: "rgba(249,223,109,0.6)" },
   { name: "Green", bg: "#a0c35a", text: "#1a1a1a", glow: "rgba(160,195,90,0.6)" },
@@ -1045,7 +1049,8 @@ export default function ConnectionsOrganizer() {
                 // reader knows which row it's in. The padlock and the strip
                 // are styled in index.css (.lock-btn / .row-name) and take
                 // the row's pastel from the two custom properties set here,
-                // so ROW_COLORS stays the one place the pastels are written.
+                // so ROW_COLORS stays the one place in the code the pastels
+                // are written.
                 <div
                   key={rowIdx}
                   role="group"
@@ -1556,9 +1561,9 @@ const styles = {
     gap: 8,
     marginBottom: 6,
   },
-  // The padlock and the name strip inside it are .lock-btn / .row-name in
-  // index.css (they need a hover and read the row's pastel from custom
-  // properties the row's group sets).
+  // The padlock and the name strip on the row's control line are .lock-btn /
+  // .row-name in index.css (the padlock needs a hover, and both read the row's
+  // pastel from custom properties the row's group sets).
   tileRow: {
     display: "grid",
     // minmax(0, 1fr), not 1fr: a 1fr track's min size is its content's

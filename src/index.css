@@ -67,7 +67,12 @@
      over the page's glow like any other translucent fill. Lower in dark: the
      four pastels are all light, and over near-black a stronger mix goes
      muddy and costs the name its 4.5:1 — theme.test.js recomputes --text-soft
-     on each tint, over both --bg and --bg-2, in both schemes. */
+     on each tint, over both --bg and --bg-2, in both schemes. Neither value is
+     the ceiling, and dark is close to it: the floor allows about 45% here
+     (purple over --bg is the tightest, 4.86:1 at 36%) but only about 27% in
+     dark (yellow over --bg-2, 4.98:1 at 24%). The body::before grain isn't in
+     that model and eats a little of the dark margin, so don't tune either
+     value up to the computed edge. */
   --row-tint: 36%;
 
   --selected-bg: #29251e;
@@ -222,8 +227,9 @@ body::before {
    because the padlock needs a hover and an inline background would outrank
    it. The row's pastel reaches both through two custom properties the row's
    group div sets inline from ROW_COLORS in App.jsx (--row-color, --row-text),
-   so the four pastels are still written in exactly one place. The padlock
-   also carries `.btn` for its transition and press nudge. */
+   so the four pastels are still written in exactly one place in the code
+   (DESIGN.md's copy is pinned to it by theme.test.js). The padlock also
+   carries `.btn` for its transition and press nudge. */
 .lock-btn {
   display: inline-flex;
   align-items: center;
@@ -506,7 +512,6 @@ textarea::placeholder {
 /* Shared focus ring — visible in both themes (token flips with the scheme). */
 button:focus-visible,
 a:focus-visible,
-input:focus-visible,
 textarea:focus-visible {
   outline: 3px solid var(--focus-ring);
   outline-offset: 2px;

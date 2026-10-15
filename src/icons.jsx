@@ -1,10 +1,8 @@
 // The app's six icons, drawn inline so they come from the same place on every
-// platform. They started as text characters (⋯ ✕ ↑ ↗, and the lock chip's
-// ✓ ○ before the two padlocks replaced that pair) — Libre Franklin doesn't
-// carry most of those code points, so each rendered from whatever font the OS
-// fell back to, with its own weight and baseline: the check in a locked chip
-// sat visibly heavier than the label beside it, and Android and Windows picked
-// different fallbacks again. An SVG is the same 16-unit drawing everywhere.
+// platform. Libre Franklin doesn't carry symbols like ⋯ ✕ ↑ ↗, so a text
+// character renders from whatever font the OS falls back to, with its own
+// weight and baseline — and Android and Windows each fall back to a different
+// font again. An SVG is the same 16-unit drawing everywhere.
 //
 // Each is 1em square and drawn in `currentColor`, so it takes the size and
 // color of the text it sits in, and each is `aria-hidden`: every one of them
@@ -73,9 +71,10 @@ export function LockIcon(props) {
 }
 
 /** An open padlock: the row is not locked yet. The same arch as LockIcon's,
- *  lifted a unit, with its free leg stopping at the top of the arc instead of
- *  reaching the body — at 15px it is the gap under that leg, and the two legs
- *  no longer matching, that read as "open". */
+ *  lifted a unit (its left leg lengthened so it still meets the body), with no
+ *  right leg: the stroke ends where the arc comes down on the right, 3.25 units
+ *  above the body. At 15px it is that gap, and the lopsided shackle, that read
+ *  as "open". */
 export function LockOpenIcon(props) {
   return (
     <Icon {...props}>
