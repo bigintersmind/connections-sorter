@@ -383,7 +383,7 @@ body::before {
     background: var(--bg-2);
     border-color: var(--text-faint);
   }
-  .ghost-btn:not(:disabled):hover { color: var(--text); }
+  .ghost-btn:not(:disabled):not([aria-disabled="true"]):hover { color: var(--text); }
   .footer-link:hover { text-decoration: underline; }
 }
 
@@ -525,8 +525,13 @@ button:disabled { cursor: not-allowed; }
 /* The notice's dismiss, pushed to the far end of the bar. */
 .ghost-btn-end { margin-left: auto; }
 /* The notice's Retry is disabled while a load is already running — the
-   ghost treatment has no border or fill to grey out, so fade it. */
-.ghost-btn:disabled { opacity: 0.5; }
+   ghost treatment has no border or fill to grey out, so fade it. Through
+   aria-disabled, not `disabled`: the button pressed is the one with focus,
+   and Chrome drops focus to <body> from a control that becomes disabled
+   (#32). */
+.ghost-btn:disabled,
+.ghost-btn[aria-disabled="true"] { opacity: 0.5; }
+.ghost-btn[aria-disabled="true"] { cursor: not-allowed; }
 
 /* The manual-entry textarea reads as a real field, not pre-filled content —
    its placeholder stays lighter than a typed value, but at a readable weight

@@ -228,6 +228,13 @@ export default function ConnectionsOrganizer() {
   // when a board is on screen, or inside the empty state when there is none.
   const [loadError, setLoadError] = useState(null);
   const [selected, setSelected] = useState(null);
+  // The last swap in words, for a screen reader: { key, text }. A keyboard
+  // swap leaves focus on a tile whose word has just changed and nothing else
+  // says so, so the hint's live region speaks it (#32). Keyed to the board it
+  // happened on, so a tap swap whose 200ms commit lands after a day switch
+  // never speaks over the new board. Cleared when the next tile is picked up,
+  // a shuffle moves the words, or another board lands.
+  const [swapNote, setSwapNote] = useState(null);
   const [flashRow, setFlashRow] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
   // The drag in progress, or null. Only set once the press has cleared
@@ -284,6 +291,8 @@ export default function ConnectionsOrganizer() {
   const gridRef = useRef(null);
   const segsRef = useRef(null);
   const overflowRef = useRef(null);
+  const moreBtnRef = useRef(null);
+  const noticeRef = useRef(null);
   const manualItemRef = useRef(null);
   const howRef = useRef(null);
 
@@ -420,20 +429,42 @@ export default function ConnectionsOrganizer() {
     setSettle(null);
   }, [activeKey, screen, clearSettleTimers]);
 
+  // Back and Load Puzzle unmount the manual screen from under the button just
+  // pressed, which drops focus to <body>: a keyboard or screen-reader user
+  // would start again from the top of the page. Hand it to the More button,
+  // where the manual screen is reached from (#32). Only on the way back from
+  // manual — on mount the first Tab has to land on Today (#10).
+  const prevScreenRef = useRef(screen);
+  useEffect(() => {
+    if (prevScreenRef.current === "manual" && screen === "board") moreBtnRef.current?.focus();
+    prevScreenRef.current = screen;
+  }, [screen]);
+
   // Cancel an in-flight load so a slow request can't complete later and yank
   // the player onto a day they've since navigated away from.
   const abortInFlight = useCallback(() => {
     fetchAbortRef.current?.abort(SUPERSEDED);
   }, []);
 
+  // The failure notice unmounts when it's dismissed or a board lands (a Retry
+  // that worked), and the button that had focus goes with it, dropping focus
+  // to <body>. Hand it to More first: it sits just before the notice, so the
+  // next Tab reaches the board as it would have from the notice (#32). Only
+  // when focus is in the notice — Safari doesn't focus a clicked button.
+  const moveFocusOffNotice = useCallback(() => {
+    if (noticeRef.current?.contains(document.activeElement)) moreBtnRef.current?.focus();
+  }, []);
+
   // Everything that becomes true the moment a board lands on screen, from any
   // path: the launch blank is over, a stale failure message is gone, and no
   // tile stays picked up from the board we just left.
   const landed = useCallback(() => {
+    moveFocusOffNotice();
     setLaunching(false);
     setLoadError(null);
     setSelected(null);
-  }, []);
+    setSwapNote(null);
+  }, [moveFocusOffNotice]);
 
   // Show a day. A day whose board is saved switches instantly with no network
   // — the outgoing board keeps its play state, so switching back is lossless.
@@ -571,19 +602,21 @@ export default function ConnectionsOrganizer() {
     if (lockedRows[row]) return;
     if (selected === null) {
       setSelected(index);
+      setSwapNote(null);
     } else if (selected === index) {
       setSelected(null);
     } else {
       const selectedRow = Math.floor(selected / 4);
-      if (lockedRows[selectedRow]) { setSelected(index); return; }
+      if (lockedRows[selectedRow]) { setSelected(index); setSwapNote(null); return; }
       setSwapAnim({ a: selected, b: index });
       setTimeout(() => {
         commitSwap(selected, index, activeKey);
+        setSwapNote({ key: activeKey, text: `Swapped ${tiles[selected]} with ${tiles[index]}` });
         setSwapAnim(null);
         setSelected(null);
       }, 200);
     }
-  }, [selected, lockedRows, activeKey, swapAnim, commitSwap]);
+  }, [selected, lockedRows, activeKey, swapAnim, commitSwap, tiles]);
 
   // Drag-to-swap. Pointer Events rather than HTML5 drag-and-drop, which never
   // fires for a finger; `setPointerCapture` from the press rather than from
@@ -679,6 +712,7 @@ export default function ConnectionsOrganizer() {
     // tile picked up earlier by tap stays picked up.
     if (over === null) return;
     commitSwap(press.from, over, press.key);
+    setSwapNote({ key: press.key, text: `Swapped ${tiles[press.from]} with ${tiles[over]}` });
     // Seed the settle in the SAME handler as the swap, so React batches the
     // two into one commit: the frame that swaps the words is the frame that
     // puts each tile back where its new word already was, and the player sees
@@ -710,7 +744,7 @@ export default function ConnectionsOrganizer() {
     // under it has changed, so clear it rather than let the next tap swap
     // against a position the player didn't choose.
     setSelected(null);
-  }, [lockedRows, commitSwap, activeKey]);
+  }, [lockedRows, commitSwap, activeKey, tiles]);
 
   // Run the settle, a phase at a time: unseed on the next frame, hold the
   // glide, then end it.
@@ -828,6 +862,7 @@ export default function ConnectionsOrganizer() {
       return updateActive(s, { tiles: next });
     });
     setSelected(null);
+    setSwapNote(null);
   }, []);
 
   const openOverflow = useCallback(() => {
@@ -998,6 +1033,7 @@ export default function ConnectionsOrganizer() {
               Shuffle
             </button>
             <button
+              ref={moreBtnRef}
               className="btn small-btn icon-btn"
               onClick={openOverflow}
               aria-label="More options"
@@ -1015,18 +1051,21 @@ export default function ConnectionsOrganizer() {
             populated, which is exactly the case a live region doesn't announce
             — the standing sr-only status below speaks it instead. */}
         {board && loadError && (
-          <div className="notice" style={styles.notice}>
+          <div ref={noticeRef} className="notice" style={styles.notice}>
             <span>{loadError.message}</span>
+            {/* aria-disabled rather than disabled while a load runs, so a
+                keyboard press keeps its focus here (see .ghost-btn in
+                index.css). */}
             <button
               className="ghost-btn ghost-btn-action"
-              onClick={() => loadDay(loadError.key)}
-              disabled={fetchingKey !== null}
+              onClick={() => { if (fetchingKey === null) loadDay(loadError.key); }}
+              aria-disabled={fetchingKey !== null}
             >
               Retry
             </button>
             <button
               className="ghost-btn ghost-btn-end"
-              onClick={() => setLoadError(null)}
+              onClick={() => { moveFocusOffNotice(); setLoadError(null); }}
               aria-label="Dismiss"
             >
               <CloseIcon />
@@ -1311,8 +1350,12 @@ export default function ConnectionsOrganizer() {
 
         {/* Always rendered, for the same reason: the hint flips to the swap
             instruction the moment a tile is picked up, and that flip is only
-            announced if the region was already there. */}
-        <p style={styles.boardHint} aria-live="polite">
+            announced if the region was already there. It also speaks a swap,
+            ahead of the resting instruction it flips back to, rather than the
+            status above: that one carries a failed load for as long as the
+            notice shows, and a swap would either wait behind it or make it
+            repeat. Atomic so the two sentences are read as one. */}
+        <p style={styles.boardHint} aria-live="polite" aria-atomic="true">
           {!board ? (
             ""
           ) : selected !== null ? (
@@ -1324,7 +1367,14 @@ export default function ConnectionsOrganizer() {
               Tap another tile to swap
             </>
           ) : (
-            "Tap a tile to select, then another to swap"
+            <>
+              {/* Spoken, not shown: a sighted player watches the two tiles
+                  trade places. */}
+              {swapNote && swapNote.key === activeKey && (
+                <span className="sr-only">{swapNote.text}. </span>
+              )}
+              Tap a tile to select, then another to swap
+            </>
           )}
         </p>
       </main>
@@ -1388,10 +1438,20 @@ export default function ConnectionsOrganizer() {
           >
             How this works
           </button>
-          <button className="sheet-item" onClick={shareSite}>
-            Share this site
+          {/* A hint inside its button would otherwise join the button's name
+              ("Share this site Send a link to a friend"), and a voice-control
+              user would have to say all of it. labelledby names the button by
+              its label alone and describedby reads the hint after (#32); this
+              and Reset below. */}
+          <button
+            className="sheet-item"
+            onClick={shareSite}
+            aria-labelledby="share-label"
+            aria-describedby="share-hint"
+          >
+            <span id="share-label">Share this site</span>
             {/* aria-live so "Link copied" is announced without moving focus. */}
-            <span className="sheet-hint" aria-live="polite">
+            <span id="share-hint" className="sheet-hint" aria-live="polite">
               {shareStatus === "copied"
                 ? "Link copied"
                 : shareStatus === "failed"
@@ -1419,9 +1479,11 @@ export default function ConnectionsOrganizer() {
             className="sheet-item sheet-item-danger"
             onClick={() => { closeOverflow(); resetBoard(); }}
             disabled={!board}
+            aria-labelledby="reset-label"
+            aria-describedby="reset-hint"
           >
-            Reset board
-            <span className="sheet-hint">Unlocks all four rows</span>
+            <span id="reset-label">Reset board</span>
+            <span id="reset-hint" className="sheet-hint">Unlocks all four rows</span>
           </button>
         </div>
         <button className="sheet-close" onClick={closeOverflow}>Cancel</button>
