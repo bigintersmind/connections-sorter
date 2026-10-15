@@ -10,8 +10,9 @@
 //   2. The launch rule is one sentence — same ET day resumes the board the
 //      player was on, a new ET day opens Today — and the ET day boundary
 //      (including across DST) is what flips it, never the UTC one.
-//   3. Migration from either older save shape is lossless: every board that
-//      can be placed keeps its progress, under its date or as Custom.
+//   3. Migration from either older save shape keeps the player's progress:
+//      every board that can be placed arrives with its tiles and locks,
+//      under its date or as Custom.
 //   4. Malformed data degrades per board, never per store: one corrupt entry
 //      can't take the player's other days down with it.
 //   5. parse(serialize(store)) round-trips, so persist and resume can't drift.
@@ -178,7 +179,7 @@ describe("parseStore — v2 shape", () => {
   it("reads a save written before labels were dropped, tiles and locks intact (#27)", () => {
     // Every board persisted before #27 carries `labels`, from the per-row text
     // field that has since gone. There's no version bump: the board is rebuilt
-    // from the keys this module knows, so the stale field — well-formed or
+    // from the fields this module knows, so the stale field — well-formed or
     // not — falls away, and the next persist writes the board without it.
     const raw = JSON.stringify(
       storeOf(
@@ -195,7 +196,7 @@ describe("parseStore — v2 shape", () => {
       storeOf({ [TODAY]: played({ date: TODAY }), [YESTERDAY]: daily(YESTERDAY) }, TODAY, TODAY),
     );
     expect(decideLaunch(store, TODAY)).toBe("resume");
-    expect(serializeStore(store)).not.toContain("labels");
+    expect(serializeStore(JSON.parse(raw))).not.toContain("labels");
   });
 
   it("keeps active only when its board survived, and activeDate only when ISO", () => {
@@ -255,6 +256,9 @@ describe("parseStore — nothing usable is no save", () => {
 const twoSlot = (current, previous) =>
   JSON.stringify(previous === undefined ? { current } : { current, previous });
 
+// `labels` (the per-row field removed in #27) and `chosenExplicitly` are real
+// fields of this pre-v2 shape, kept so the migration tests prove both are
+// dropped — not just never present.
 const oldBoard = (over = {}) => ({
   tiles: TILES,
   lockedRows: [true, false, false, false],
@@ -277,9 +281,11 @@ describe("parseStore — two-slot migration", () => {
       date: TODAY,
     });
     expect(store.boards[YESTERDAY].tiles).toEqual(OTHER_TILES);
-    // chosenExplicitly is gone from the schema — the new launch rule has no
-    // exemptions to encode.
+    // chosenExplicitly and labels are both gone from the schema — the new
+    // launch rule has no exemptions to encode, and the per-row label field
+    // left the board in #27.
     expect("chosenExplicitly" in store.boards[TODAY]).toBe(false);
+    expect("labels" in store.boards[TODAY]).toBe(false);
   });
 
   it("resumes only when the current board was provably today's", () => {
@@ -365,6 +371,7 @@ describe("parseStore — two-slot migration", () => {
 });
 
 describe("parseStore — flat legacy blob", () => {
+  // `labels` is kept deliberately, for the same reason as oldBoard's.
   const legacyBlob = (extra = {}) =>
     JSON.stringify({
       tiles: TILES,
@@ -603,7 +610,7 @@ describe("placeFetched", () => {
   it("adopts a matching custom board — progress moves to the day, Custom clears", () => {
     // Contract #6: words typed during an outage turn out to be that day's
     // puzzle. Order, case, spacing, and Unicode composition are all
-    // irrelevant; the player's arrangement and locks are not.
+    // irrelevant to the match; the player's arrangement and locks carry over.
     const typed = [" el  niño ", "café", ...TILES.slice(2)];
     const fetched = ["CAFÉ", "EL NIÑO", ...[...TILES.slice(2)].reverse()];
     const store = deepFreeze(

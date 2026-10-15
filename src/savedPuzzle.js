@@ -4,9 +4,8 @@
 // key — { version, boards, active, activeDate } — where `boards` maps a key to
 // one board's play state (tiles, lockedRows) plus its provenance (source,
 // date). Saves written before #27 also carry `labels`, from a per-row text
-// field that has since gone; boards are rebuilt from known keys on every
-// parse, so the stale field drops away on the next persist with no version
-// bump.
+// field that has since gone; boards are rebuilt field by field on every parse,
+// so the stale field drops away on the next persist with no version bump.
 // A key is either a puzzle date in ISO form (that day's board) or CUSTOM_KEY,
 // the single slot for words the player typed in themselves. On top of the
 // schema this module owns every decision that depends on it: the launch rule,
@@ -307,12 +306,13 @@ function normalizeStore(data) {
 }
 
 // Validate one keyed board, or null if it isn't one. Tiles are the save —
-// invalid tiles reject the board. Locks are recoverable decoration and reset
-// to defaults instead, and any other field (a pre-#27 board's `labels`) is
-// left behind. The key decides the rest: a daily board takes
-// its date FROM its key (the two can never drift), while the custom board
-// carries the ET date it was typed on, which is the only thing that can age it
-// out — a custom board without one would live forever, so it's rejected.
+// invalid tiles reject the board. Locks and provenance are recoverable:
+// corrupt locks reset to none and an unrecognized source becomes "unknown",
+// and any other field (a pre-#27 board's `labels`) is left behind. The key
+// decides the rest: a daily board takes its date FROM its key (the two can
+// never drift), while the custom board carries the ET date it was typed on,
+// which is the only thing that can age it out — a custom board without one
+// would live forever, so it's rejected.
 function normalizeBoard(key, b) {
   const isDailyKey = isIsoDate(key);
   if (!isDailyKey && key !== CUSTOM_KEY) return null;
