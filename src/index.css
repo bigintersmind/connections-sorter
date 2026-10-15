@@ -222,34 +222,56 @@ body::before {
 }
 .btn:not(:disabled):active { transform: translateY(1px); }
 
-/* Each row's control line: a padlock and, beside it, the row's colour name on
-   a strip of its pastel. Styled here rather than inline, like .small-btn,
-   because the padlock needs a hover and an inline background would outrank
-   it. The row's pastel reaches both through two custom properties the row's
-   group div sets inline from ROW_COLORS in App.jsx (--row-color, --row-text),
-   so the four pastels are still written in exactly one place in the code
-   (DESIGN.md's copy is pinned to it by theme.test.js). The padlock also
-   carries `.btn` for its transition and press nudge. */
-.lock-btn {
+/* Each row's lock line: a padlock and, beside it, the row's colour name on a
+   strip of its pastel — and the whole line is the one button that locks the
+   row, so the strip is target, not just label. Styled here rather than
+   inline, like .small-btn, because the line needs a hover and a button reset,
+   and an inline background would outrank the hover. The row's pastel reaches
+   both halves through two custom properties the row's group div sets inline
+   from ROW_COLORS in App.jsx (--row-color, --row-text), so the four pastels
+   are still written in exactly one place in the code (DESIGN.md's copy is
+   pinned to it by theme.test.js). The line also carries `.btn` for its press
+   nudge. Both halves read the locked state off the button's own aria-pressed,
+   so there is one source for it. */
+.row-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--r-sm);
+  font-family: var(--font);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* The padlock box. The 30px floor is the line's height, now that the line is
+   the target; the 15px icon plus 6px of side padding and the border comes to
+   29px, so the width rides on the floor too and the box stays square. */
+.row-lock {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  /* The target-size floor, square: the 15px icon plus 6px of side padding and
-     the border comes to 29px, so the width rides on the floor too. */
   min-width: 30px;
   min-height: 30px;
   padding: 0 6px;
-  background: transparent;
   color: var(--text-muted);
   border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   font-size: var(--fs-lg);
   line-height: 1;
-  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
+/* A hover anywhere on the line lights the padlock — the cue that the strip is
+   part of the same control. */
 @media (hover: hover) {
-  .lock-btn:hover {
+  .row-line:hover .row-lock {
     background: var(--bg-2);
     border-color: var(--text-faint);
     color: var(--text);
@@ -257,18 +279,17 @@ body::before {
 }
 /* Locked: the row's pastel. After the hover rule, at the same specificity, so
    a hovered locked padlock keeps its fill. */
-.lock-btn[aria-pressed="true"] {
+.row-line[aria-pressed="true"] .row-lock {
   background: var(--row-color);
   color: var(--row-text);
   border-color: var(--row-color);
 }
 
-/* The name strip fills the rest of the line and is read-only — the padlock is
-   the only control on it. Unlocked it wears the pastel at --row-tint with the
-   name in --text-soft; locked it takes the full pastel and the pastel's dark
-   text, and the name's weight steps up, which with the padlock closing and
-   the tiles turning is the whole visual of "locked". The transition lives
-   here so the reduced-motion block can reach it. */
+/* The name strip fills the rest of the line. Unlocked it wears the pastel at
+   --row-tint with the name in --text-soft; locked it takes the full pastel and
+   the pastel's dark text, and the name's weight steps up, which with the
+   padlock closing and the tiles turning is the whole visual of "locked". The
+   transition lives here so the reduced-motion block can reach it. */
 .row-name {
   flex: 1;
   min-width: 0;
@@ -285,7 +306,7 @@ body::before {
   white-space: nowrap;
   transition: background 0.2s ease, color 0.2s ease;
 }
-.row-name-locked {
+.row-line[aria-pressed="true"] .row-name {
   background: var(--row-color);
   color: var(--row-text);
   font-weight: 700;
@@ -800,10 +821,10 @@ textarea:focus-visible {
    `sheetIn`) use a `both` fill, so the frame they hold is already the natural
    style; `lockPop` is not an entrance and not filled, but its 0% and 100% are
    both `scale(1)`, so removing it leaves the tile exactly where it ends up
-   anyway. The four selectors below are every transition in the app that has
+   anyway. The five selectors below are every transition in the app that has
    anything to drop — every `transition` declaration lives in this file, so
-   none escapes inline (the padlock carries `className="btn lock-btn"` and
-   takes `.btn`'s), and the only two not listed are `.tile-dragging` and
+   none escapes inline (a row's lock line carries `className="btn row-line"`
+   and takes `.btn`'s), and the only two not listed are `.tile-dragging` and
    `.tile-seeded`, which already set `transition: none` for everyone — the
    first so a carried tile can keep up with the pointer, the second so the
    frame that re-seats a dropped swap doesn't animate. What follows that frame
@@ -832,5 +853,6 @@ textarea:focus-visible {
   .btn,
   .tile,
   .seg,
+  .row-lock,
   .row-name { transition: none; }
 }

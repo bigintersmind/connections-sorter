@@ -158,16 +158,19 @@ components:
     backgroundColor: "{colors.bg-2}"
     textColor: "{colors.text}"
     rounded: "{rounded.md}"
-  lock-button:
+  row-line:
+    rounded: "{rounded.sm}"
+    height: "30px"
+  row-lock:
     textColor: "{colors.text-muted}"
     rounded: "{rounded.sm}"
     padding: "0 6px"
     size: "30px"
-  lock-button-hover:
+  row-lock-hover:
     backgroundColor: "{colors.bg-2}"
     textColor: "{colors.text}"
     rounded: "{rounded.sm}"
-  lock-button-locked:
+  row-lock-locked:
     textColor: "{colors.row-text}"
     rounded: "{rounded.sm}"
   row-name:
@@ -255,13 +258,13 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 ### Named Rules
 **The Five Steps Rule.** Type sizes are `--fs-xs` 12, `--fs-sm` 13, `--fs-md` 14, `--fs-lg` 15 and `--fs-xl` 20. The deliberate literals — pills and circles aside, which are `999px` and `50%` by definition — are the tile word (measured), the day switcher's 13 / 12 / 11.5 px segments (a 320 px budget tuned to the half-pixel in #15 — retune all of them together or not at all), and the 17 px dialog heading. Anything new picks a step.
 
-**The Weight Carries the Verb Rule.** If it reads as a *button*, it is 600 or heavier; if you only read it, it is 500 or lighter. There are two deliberate exceptions, one each way. The ghost buttons are quiet (400, bar Retry's 700). And a locked row's name is read-only yet set at 700: its step up from 500 as the strip fills to the full pastel is part of how the control line says "locked", alongside the padlock closing, so the weight there carries state rather than a verb. Links are not buttons — the footer link stays at 400 too.
+**The Weight Carries the Verb Rule.** If it reads as a *button*, it is 600 or heavier; if you only read it, it is 500 or lighter. There are two deliberate exceptions, one each way. The ghost buttons are quiet (400, bar Retry's 700). And a row's name is the label of its lock line yet reads first as a name, so it sits at 500 at rest — the padlock box carries the button affordance — and steps up to 700 as the strip fills to the full pastel: part of how the line says "locked", alongside the padlock closing, so the weight there carries state rather than a verb. Links are not buttons — the footer link stays at 400 too.
 
 ## Layout
 
 A single centred column, `maxWidth: 500` with `12px 10px` of padding, on a page that is `min-height: 100dvh`. Safe-area insets (`env(safe-area-inset-*)`) are paid on `#root`, never on the column, so a notched phone in landscape keeps its full board width.
 
-The board is four rows, `gap: 14` between them. Each row is a control line — the padlock and the flex-filling name strip, `gap: 8`, `marginBottom: 6` — above a `repeat(4, minmax(0, 1fr))` grid of square tiles with `gap: 6`. The `minmax(0, 1fr)` is load-bearing: a long unbreakable word must overflow its cell (and be shrunk to fit) rather than widen its column past the viewport.
+The board is four rows, `gap: 14` between them. Each row is a lock line — one full-width button holding the padlock and the flex-filling name strip, `gap: 8`, `marginBottom: 6` — above a `repeat(4, minmax(0, 1fr))` grid of square tiles with `gap: 6`. The `minmax(0, 1fr)` is load-bearing: a long unbreakable word must overflow its cell (and be shrunk to fit) rather than widen its column past the viewport.
 
 The header is one row at every width: the day-switcher pill on the left, Shuffle and the overflow trigger on the right, `justifyContent: space-between` with a 6 px floor. At 320 px the budget is exact — 300 px of content minus 96 px of buttons and the gap leaves the pill 198 px, and four segments at 11.5 px need 194 of it — so `@media (max-width: 380px)` tightens segment padding, drops the saved-day dots when there are four segments, and shrinks the two buttons to `6px 8px`. If a fallback font ever overruns that, the pill scrolls horizontally rather than wrapping the header.
 
@@ -296,8 +299,10 @@ Tiles keep a `1.5px solid transparent` border in every state so a ring can repla
 ### Tiles
 Sixteen square buttons, `--tile-bg` with `--tile-border` and `--tile-shadow`, the word in the Tile type. State precedence: **locked** (the row's pastel, its dark text, no border, a soft glow) wins over **carried** (`--selected-bg` and `--selected-text`, a 2.5 px ring in `--selected-text`, `--selected-shadow`, following the pointer at `scale(1.04)`), then **picked up** (the same fill on a 2.5 px `--selected-ring`), then **drop target** (resting fill, a 3 px `--selected-ring`), then **resting**. A dropped swap ends in a **settle**: for one frame each of the two tiles holds the position and the look its new word had while the drag was live, then both are released and ease into their new cells over 0.15 s — the dropped word travelling the last few px from under the finger, the displaced one sliding across into the vacated cell — lifted above the board until they are at rest. A mouse hover lifts a resting tile `translateY(-2px)`; a press scales it to `0.97`; a locked tile does neither and shows a default cursor. Locking a row plays `lockPop` (0.45 s, overshoot to 1.07) while the glow flares. The board arrives with `tileIn` (0.42 s, `cubic-bezier(0.2, 0.7, 0.2, 1)`), each tile delayed `min(index × 22, 330)` ms so the grid cascades top-left to bottom-right.
 
-### Padlock and row name
-The padlock is a 30 × 30 px-floor icon button (`--fs-lg` icon box, `0 6px`, `--r-sm`, `line-height 1`). Unlocked it is transparent, an open padlock in `--text-muted` behind a `--border-strong` edge; a mouse hover tints it `--bg-2`, darkens the edge to `--text-faint` and the padlock to `--text`. Locked, fill and edge both take the row's pastel and the padlock closes in the pastel's dark text; a hover changes nothing there, because the locked rule sets all three of the properties the hover would. The strip beside it fills the rest of the line (30 px floor, `6px 10px`, `--r-sm`, `--fs-sm`): the row's colour name — Yellow, Green, Blue, Purple — in `--text-soft` at 500 on the pastel at `--row-tint`, and once the row is locked the full pastel with its dark text at 700. The strip is read-only; there is nothing to type in a row, and the padlock is the only control on the line. Both take the row's pastel from `--row-color` / `--row-text`, set inline on the row's group from `ROW_COLORS`.
+### Lock line (padlock and row name)
+Each row's lock line is one full-width button with no fill or edge of its own — `--r-sm`, so the shared focus ring wraps the whole line with rounded corners, and `.btn`'s 1 px press nudge. The whole line is the target: a 30 px padlock beside a larger strip that did nothing sent thumbs to the strip, so the strip is part of the control, not a label beside it. There is nothing to type in a row.
+
+Inside it, the padlock is a 30 × 30 px-floor icon box (`--fs-lg` icon, `0 6px`, `--r-sm`, `line-height 1`). Unlocked it is transparent, an open padlock in `--text-muted` behind a `--border-strong` edge; a mouse hover anywhere on the line tints the box `--bg-2`, darkens its edge to `--text-faint` and the padlock to `--text` — the cue that the strip is part of the same control. Locked, fill and edge both take the row's pastel and the padlock closes in the pastel's dark text; a hover changes nothing there, because the locked rule sets all three of the properties the hover would. The strip beside it fills the rest of the line (30 px floor, `6px 10px`, `--r-sm`, `--fs-sm`): the row's colour name — Yellow, Green, Blue, Purple — in `--text-soft` at 500 on the pastel at `--row-tint`, and once the row is locked the full pastel with its dark text at 700. Both halves take the row's pastel from `--row-color` / `--row-text`, set inline on the row's group from `ROW_COLORS`, and the locked state from the button's own `aria-pressed`.
 
 ### Day switcher (segmented control)
 A `--surface` pill with a `--border` hairline, 2 px of padding and 2 px between segments; each segment is a 30 px-floor pill at 13 px 600 in `--text-muted`, the pressed one filled `--selected-bg` with `--selected-text`. A day with a saved board shows a 5 px `--text-faint` dot; a day being fetched shows a 9 px spinner in the same slot so nothing shifts. The same classes build the System / Light / Dark row in the sheet, where the pill takes `--bg` so it stays inset against the sheet's surface.
@@ -324,7 +329,7 @@ Six inline SVGs in `src/icons.jsx` — more, close, lock, lock-open, arrow-up, e
 One ring for everything: `3px solid var(--focus-ring)` at a 2 px offset on any focused button, link or field. It tucks inside two things that would otherwise spill: segments (offset −1 px, inside the pill's padding) and sheet rows (offset −3 px, since a full-width row's outset ring hangs off both sides of the dialog).
 
 ### Motion
-Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 0.12 s and colour, background, border, shadow and opacity in 0.2 s; tiles ease transform in 0.15 s and shadow in 0.3 s; segments in 0.18 s; a row's name strip eases background and colour in 0.2 s as it fills on a lock. A carried tile drops its transition so it can keep up with the finger, and the single re-seat frame that starts a settle drops it for the same reason: nothing there is meant to move. Under `prefers-reduced-motion: reduce` the three entrances and the lock pop are set to `animation: none` and the four transitions to `none`, one selector each — and a dropped swap is not seeded at all there: with the tile transition off, the drop's own frame lands both tiles at rest in their new cells; the two spinners keep turning, because a small rotating ring is the only sign a fetch is in flight and is not vestibular motion.
+Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 0.12 s and colour, background, border, shadow and opacity in 0.2 s; tiles ease transform in 0.15 s and shadow in 0.3 s; segments in 0.18 s; a row's name strip eases background and colour in 0.2 s as it fills on a lock, and its padlock box eases background, edge and colour in 0.2 s alongside. A carried tile drops its transition so it can keep up with the finger, and the single re-seat frame that starts a settle drops it for the same reason: nothing there is meant to move. Under `prefers-reduced-motion: reduce` the three entrances and the lock pop are set to `animation: none` and the five transitions to `none`, one selector each — and a dropped swap is not seeded at all there: with the tile transition off, the drop's own frame lands both tiles at rest in their new cells; the two spinners keep turning, because a small rotating ring is the only sign a fetch is in flight and is not vestibular motion.
 
 ## Do's and Don'ts
 

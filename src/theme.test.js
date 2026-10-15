@@ -281,7 +281,7 @@ describe("the row name reads on its strip", () => {
       "color-mix(in srgb, var(--row-color) var(--row-tint), transparent)",
     );
     expect(decl(strip, "color"), ".row-name's color").toBe("var(--text-soft)");
-    for (const sel of [".row-name-locked", '.lock-btn[aria-pressed="true"]']) {
+    for (const sel of ['.row-line[aria-pressed="true"] .row-name', '.row-line[aria-pressed="true"] .row-lock']) {
       expect(decl(rule(sel), "background"), `${sel}'s background`).toBe("var(--row-color)");
       expect(decl(rule(sel), "color"), `${sel}'s color`).toBe("var(--row-text)");
     }

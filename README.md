@@ -13,7 +13,7 @@ The app opens straight onto today's puzzle — the words load automatically, no 
 On the board:
 
 - Tap two tiles to swap them, or drag one tile onto another
-- Tap a row's padlock to lock that grouping in once you're confident in it
+- Tap a row's colour bar to lock that grouping in once you're confident in it
 - Shuffle randomizes any unlocked rows
 
 Behind the overflow button (⋯) in the header:

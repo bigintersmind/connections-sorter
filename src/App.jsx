@@ -1044,10 +1044,12 @@ export default function ConnectionsOrganizer() {
               const color = ROW_COLORS[rowIdx];
 
               return (
-                // Each row is a padlock, the row's colour name on a strip of
-                // its pastel, and four tiles; the group names it so a screen
-                // reader knows which row it's in. The padlock and the strip
-                // are styled in index.css (.lock-btn / .row-name) and take
+                // Each row is a lock line — a padlock and the row's colour name
+                // on a strip of its pastel — and four tiles; the group names
+                // it so a screen reader knows which row it's in. The whole
+                // line is one button, so a thumb that lands on the name locks
+                // the row as surely as one that finds the padlock. It's styled
+                // in index.css (.row-line / .row-lock / .row-name) and takes
                 // the row's pastel from the two custom properties set here,
                 // so ROW_COLORS stays the one place in the code the pastels
                 // are written.
@@ -1057,21 +1059,21 @@ export default function ConnectionsOrganizer() {
                   aria-label={`${color.name} row`}
                   style={{ "--row-color": color.bg, "--row-text": color.text }}
                 >
-                  <div style={styles.rowControl}>
-                    <button
-                      className="btn lock-btn"
-                      aria-pressed={locked}
-                      aria-label={`Lock ${color.name} row`}
-                      onClick={() => toggleLock(rowIdx)}
-                    >
-                      {/* The padlock restates aria-pressed, and the aria-label
-                          above says what the button does, so it stays hidden. */}
+                  <button
+                    className="btn row-line"
+                    aria-pressed={locked}
+                    aria-label={`Lock ${color.name} row`}
+                    onClick={() => toggleLock(rowIdx)}
+                  >
+                    {/* The padlock restates aria-pressed, and the aria-label
+                        above says what the button does, so it stays hidden.
+                        The name is the label's visible half ("Lock Yellow
+                        row" contains "Yellow", as WCAG 2.5.3 wants). */}
+                    <span className="row-lock" aria-hidden="true">
                       {locked ? <LockIcon /> : <LockOpenIcon />}
-                    </button>
-                    <div className={locked ? "row-name row-name-locked" : "row-name"}>
-                      {color.name}
-                    </div>
-                  </div>
+                    </span>
+                    <span className="row-name">{color.name}</span>
+                  </button>
 
                   <div style={styles.tileRow}>
                     {[0, 1, 2, 3].map(colIdx => {
@@ -1431,7 +1433,7 @@ export default function ConnectionsOrganizer() {
           <ol style={styles.howList}>
             <li>Today's words load automatically. Switch to yesterday's or the day before from the header.</li>
             <li>Tap two tiles to swap them, or drag one onto another. Group words you think share a category into the same row.</li>
-            <li>Tap a row's padlock to lock in a group you're sure of, then enter your guesses on the official NYT game.</li>
+            <li>Tap a row's colour bar to lock in a group you're sure of, then enter your guesses on the official NYT game.</li>
           </ol>
           <p style={styles.howNote}>
             Nothing leaves your device except the request for the day's words.
@@ -1555,15 +1557,9 @@ const styles = {
     borderTopColor: "var(--text)",
     animation: "spin 0.8s linear infinite",
   },
-  rowControl: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    marginBottom: 6,
-  },
-  // The padlock and the name strip on the row's control line are .lock-btn /
-  // .row-name in index.css (the padlock needs a hover, and both read the row's
-  // pastel from custom properties the row's group sets).
+  // A row's lock line is .row-line / .row-lock / .row-name in index.css (it
+  // needs a hover, a button reset, and the row's pastel from custom properties
+  // the row's group sets).
   tileRow: {
     display: "grid",
     // minmax(0, 1fr), not 1fr: a 1fr track's min size is its content's
