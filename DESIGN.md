@@ -79,6 +79,14 @@ typography:
     fontFamily: "'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium', 'Helvetica Neue', Arial, sans-serif"
     fontSize: "13px"
     fontWeight: 400
+  row-name:
+    fontFamily: "'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium', 'Helvetica Neue', Arial, sans-serif"
+    fontSize: "13px"
+    fontWeight: 500
+  row-name-locked:
+    fontFamily: "'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium', 'Helvetica Neue', Arial, sans-serif"
+    fontSize: "13px"
+    fontWeight: 700
   caption:
     fontFamily: "'Libre Franklin Variable', 'Libre Franklin', 'Franklin Gothic Medium', 'Helvetica Neue', Arial, sans-serif"
     fontSize: "12px"
@@ -150,10 +158,30 @@ components:
     backgroundColor: "{colors.bg-2}"
     textColor: "{colors.text}"
     rounded: "{rounded.md}"
-  input-label:
-    backgroundColor: "{colors.input-bg}"
+  row-line:
+    rounded: "{rounded.sm}"
+    height: "30px"
+  row-lock:
+    textColor: "{colors.text-muted}"
+    rounded: "{rounded.sm}"
+    padding: "0 6px"
+    size: "30px"
+  row-lock-hover:
+    backgroundColor: "{colors.bg-2}"
     textColor: "{colors.text}"
-    typography: "{typography.label-regular}"
+    rounded: "{rounded.sm}"
+  row-lock-locked:
+    textColor: "{colors.row-text}"
+    rounded: "{rounded.sm}"
+  row-name:
+    textColor: "{colors.text-soft}"
+    typography: "{typography.row-name}"
+    rounded: "{rounded.sm}"
+    padding: "6px 10px"
+    height: "30px"
+  row-name-locked:
+    textColor: "{colors.row-text}"
+    typography: "{typography.row-name-locked}"
     rounded: "{rounded.sm}"
     padding: "6px 10px"
     height: "30px"
@@ -176,7 +204,7 @@ This is the design reference: what the interface looks like, why, and the rules 
 
 **Creative North Star: "The Newsprint Scratchpad"**
 
-A Connections puzzle is a page from the paper, and this app is the scrap of it you work on before you commit an answer. The page is warm, not white: a soft overhead glow on unbleached paper with a whisper of grain, ink-dark text, and hairline rules. The type is Libre Franklin, the open Franklin Gothic the Times sets its own games in, so the words on the tiles look the way the puzzle looks. Almost everything is one neutral ramp; the only real colour is the puzzle's own four pastels, which appear exactly when a row is locked and nowhere else. Dark mode is the same page after lights-out — the same ramp, inverted, with a heavier drop under anything lifted so it still reads as lifted against near-black.
+A Connections puzzle is a page from the paper, and this app is the scrap of it you work on before you commit an answer. The page is warm, not white: a soft overhead glow on unbleached paper with a whisper of grain, ink-dark text, and hairline rules. The type is Libre Franklin, the open Franklin Gothic the Times sets its own games in, so the words on the tiles look the way the puzzle looks. Almost everything is one neutral ramp; the only real colour is the puzzle's own four pastels — a faint tint of each names its row, and on the board the full pastel appears exactly when a row is locked (the four colour dots heading "How this works" are the one decorative exception). Dark mode is the same page after lights-out — the same ramp, inverted, with a heavier drop under anything lifted so it still reads as lifted against near-black.
 
 The interface is an **Operate** surface: a 4×4 board you rearrange with taps and drags, a one-line header, and everything rarely needed folded behind one overflow button. Density is calm rather than tight. Controls sit on explicit target-size floors so the header holds one row all the way down to 320 px, and state is carried by fill and ring rather than by decoration.
 
@@ -195,22 +223,22 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 - **Ink** (`--primary`, `#221f18` light / `#f2f0e6` dark): the one filled button, "Load Puzzle" on the manual screen, and its hover a step lighter (`--primary-hover`). Ink is also the picked-up state — `--selected-bg` (`#29251e` / `#f2f0e6`) fills a selected or carried tile and the pressed day segment, with `--selected-text` on top and `--selected-ring` for the ring around a drop target.
 
 ### Secondary
-- **The puzzle pastels** — Yellow `#f9df6d`, Green `#a0c35a`, Blue `#b0c4ef`, Purple `#ba81c5`, always with near-black `#1a1a1a` text (`ROW_COLORS` in `src/App.jsx`): a locked row's tiles and its lock chip, and nothing else. They are the same in both schemes on purpose; each carries a matching `glow` at 60 % alpha for the lock flash.
+- **The puzzle pastels** — Yellow `#f9df6d`, Green `#a0c35a`, Blue `#b0c4ef`, Purple `#ba81c5`, always with near-black `#1a1a1a` text (`ROW_COLORS` in `src/App.jsx`): a locked row's tiles, its padlock and its name strip at full strength, and an unlocked row's name strip at `--row-tint` (36 % light, 24 % dark) — the one place a pastel shows before a lock. Off the board they appear once, as the four 10 px dots heading the "How this works" dialog: decoration (`aria-hidden`) that shows the puzzle's palette and names nothing. They are the same in both schemes on purpose; each carries a matching `glow` at 60 % alpha for the lock flash.
 
 ### Neutral
 - **Paper** (`--bg`, `#f1efe5` / `#131210`) is the page, and **Paper light** (`--bg-2`, `#faf8f1` / `#1c1a15`) is the top of the page glow and the fill a bordered button or a sheet row takes on hover.
 - **Card** (`--surface`, `#ffffff` / `#211f19`) is every raised thing — the notice bar, the small buttons, the day-switcher pill, the sheet — and **Tile** (`--tile-bg`, `#ffffff` / `#2b2820`) is the resting tile, with its own `--tile-text` and `--tile-border`.
-- **Text ramp** — `--text` (`#1b1813` / `#f2f0e6`) for anything you act on or must read; `--text-soft` (`#565347` / `#c4c1b4`) for explanatory copy and the notice's message; `--text-muted` (`#6c695b` / `#9a978a`) for hints, placeholders, the footer, unpressed segments and the "Cancel" row; `--text-faint` (`#918d7c` / `#807d6f`) for the saved-day dot, disabled labels and a hover edge only.
-- **Rules** — `--border` (`#e6e2d5` / `#322f27`) is the hairline between sheet rows and around cards; `--border-strong` (`#d6d1c1` / `#433f33`) is the edge of a bordered button and an unlocked lock chip. Neither is a field's edge.
-- **Field edge** (`--input-border`, `#8a8677` / `#706b5a`): the category-label inputs and the manual-entry textarea. It sits at 3.16:1 against the light page and 3.65:1 against the field's white fill, 3.51:1 against the dark page and 3.29:1 against the dark field, so the boundary of a thing you can type in passes WCAG 1.4.11 in both schemes.
+- **Text ramp** — `--text` (`#1b1813` / `#f2f0e6`) for anything you act on or must read; `--text-soft` (`#565347` / `#c4c1b4`) for explanatory copy, the notice's message and the name on an unlocked row's strip; `--text-muted` (`#6c695b` / `#9a978a`) for hints, placeholders, the footer, unpressed segments and the "Cancel" row; `--text-faint` (`#918d7c` / `#807d6f`) for the saved-day dot, disabled labels and a hover edge only.
+- **Rules** — `--border` (`#e6e2d5` / `#322f27`) is the hairline between sheet rows and around cards; `--border-strong` (`#d6d1c1` / `#433f33`) is the edge of a bordered button and an unlocked padlock. Neither is a field's edge.
+- **Field edge** (`--input-border`, `#8a8677` / `#706b5a`): the manual-entry textarea, the one field in the app. It sits at 3.16:1 against the light page and 3.65:1 against the field's white fill, 3.51:1 against the dark page and 3.29:1 against the dark field, so the boundary of a thing you can type in passes WCAG 1.4.11 in both schemes.
 - **Semantic** — `--error-text` on `--error-bg` (`#b53f33` on `#fbf1ef` light, 5.08:1; `#f0a89e` on `#2a1d1a` dark) for the manual screen's validation box and the sheet's Reset row; `--focus-ring` (`#1b1813` / `#f2f0e6`) for the one focus treatment; `--backdrop` behind the dialogs.
 
 ### Named Rules
 **The Token Rule.** Every colour in the app is a `var(--token)` with a light and a dark value. The only hex literals in `App.jsx` are the four pastels and their text, and the only ones in `index.html` are copies of `--bg` and the three text tokens that the pre-paint fallback needs before the stylesheet loads — `src/theme.test.js` pins every copy to its token.
 
-**The Faint Rule.** `--text-faint` is below 4.5:1 everywhere in light and on `--surface` in dark, and only just clears the line on the dark page (4.53:1), so it is decoration and disabled states only: the saved-day dot, a disabled chip, a hover edge. Running text, hints, placeholders and the footer stop at `--text-muted`.
+**The Faint Rule.** `--text-faint` is below 4.5:1 everywhere in light and on `--surface` in dark, and only just clears the line on the dark page (4.53:1), so it is decoration and disabled states only: the saved-day dot, a disabled small button or sheet row (Shuffle and Reset before a board loads), a hover edge. Running text, hints, placeholders and the footer stop at `--text-muted`.
 
-**The Pastels Are Not Yours Rule.** Yellow, green, blue and purple mean "this row is locked." They are not available as accents, badges or highlights, and they do not change with the theme.
+**The Pastels Are Not Yours Rule.** On the board, yellow, green, blue and purple at full strength mean "this row is locked", and at `--row-tint` they name a row. Off it they appear only as the four dots heading "How this works", the one decorative exception, which shows the palette as itself and claims nothing. They are not available as accents, badges or highlights, and they do not change with the theme.
 
 ## Typography
 
@@ -222,21 +250,21 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 - **Title** (800, `--fs-xl` 20 px, letter-spacing −0.6 px): "Enter 16 Words" on the manual screen. The board has no title row at all; its name lives in a visually hidden heading.
 - **Headline** (800, 17 px, letter-spacing −0.3 px): the "How this works" dialog heading — deliberately between `--fs-lg` and `--fs-xl`, because 15 reads as a row and 20 as a page title.
 - **Body** (400, `--fs-md` 14 px, line-height 1.5): the explainer list, the empty-state message, the textarea, and the sheet's "Cancel" row at 600.
-- **Label** (600, `--fs-sm` 13 px): the working size — Shuffle, the category-label inputs (400), the board hint (400), the notice bar (400), the manual subtitle (500), the error box, the "how this works" note. The three ghost buttons use it at 700 for Retry and 400 for the rest.
-- **Caption** (`--fs-xs` 12 px): the sheet's hint lines at 500 and the footer at 400 with line-height 1.5; the lock chips use the same size at 600, rising to 800 when locked.
+- **Label** (600, `--fs-sm` 13 px): the working size — Shuffle, the row names (500, rising to 700 when the row locks), the board hint (400), the notice bar (400), the manual subtitle (500), the error box, the "how this works" note. The three ghost buttons use it at 700 for Retry and 400 for the rest.
+- **Caption** (`--fs-xs` 12 px): the sheet's hint lines at 500 and the footer at 400 with line-height 1.5.
 - **Tile** (700, uppercase, letter-spacing 0.3 px, line-height 1.15): the sixteen words. The size is not a token — `src/fitTileFont.js` measures each word on a canvas and sets 8–20 px per tile so multi-word entries wrap at spaces and a single long word shrinks rather than breaking. On a 390 px phone every tile is 14 px; a 500 px board gets 18.5.
-- **Sheet rows** (600, `--fs-lg` 15 px): every action in the overflow sheet and the Appearance row; the manual screen's two buttons take the same size at 700 (Primary) and 600 (Secondary).
+- **Sheet rows** (600, `--fs-lg` 15 px): every action in the overflow sheet and the Appearance row; the manual screen's two buttons take the same size at 700 (Primary) and 600 (Secondary), and the padlock's icon box is the same 15 px.
 
 ### Named Rules
 **The Five Steps Rule.** Type sizes are `--fs-xs` 12, `--fs-sm` 13, `--fs-md` 14, `--fs-lg` 15 and `--fs-xl` 20. The deliberate literals — pills and circles aside, which are `999px` and `50%` by definition — are the tile word (measured), the day switcher's 13 / 12 / 11.5 px segments (a 320 px budget tuned to the half-pixel in #15 — retune all of them together or not at all), and the 17 px dialog heading. Anything new picks a step.
 
-**The Weight Carries the Verb Rule.** If it reads as a *button*, it is 600 or heavier; if you only read it, it is 500 or lighter. The ghost buttons are the deliberate quiet exception (400, bar Retry's 700), and links and fields are not buttons — the footer link and the category-label inputs stay at 400 too. The lock chip going from 600 to 800 is the whole visual of "locked."
+**The Weight Carries the Verb Rule.** If it reads as a *button*, it is 600 or heavier; if you only read it, it is 500 or lighter. There are two deliberate exceptions, one each way. The ghost buttons are quiet (400, bar Retry's 700). And a row's name is the label of its lock line yet reads first as a name, so it sits at 500 at rest — the padlock box carries the button affordance — and steps up to 700 as the strip fills to the full pastel: part of how the line says "locked", alongside the padlock closing, so the weight there carries state rather than a verb. Links are not buttons — the footer link stays at 400 too.
 
 ## Layout
 
 A single centred column, `maxWidth: 500` with `12px 10px` of padding, on a page that is `min-height: 100dvh`. Safe-area insets (`env(safe-area-inset-*)`) are paid on `#root`, never on the column, so a notched phone in landscape keeps its full board width.
 
-The board is four rows, `gap: 14` between them. Each row is a control line — the lock chip and the flex-filling label input, `gap: 8`, `marginBottom: 6` — above a `repeat(4, minmax(0, 1fr))` grid of square tiles with `gap: 6`. The `minmax(0, 1fr)` is load-bearing: a long unbreakable word must overflow its cell (and be shrunk to fit) rather than widen its column past the viewport.
+The board is four rows, `gap: 14` between them. Each row is a lock line — one full-width button holding the padlock and the flex-filling name strip, `gap: 8`, `marginBottom: 6` — above a `repeat(4, minmax(0, 1fr))` grid of square tiles with `gap: 6`. The `minmax(0, 1fr)` is load-bearing: a long unbreakable word must overflow its cell (and be shrunk to fit) rather than widen its column past the viewport.
 
 The header is one row at every width: the day-switcher pill on the left, Shuffle and the overflow trigger on the right, `justifyContent: space-between` with a 6 px floor. At 320 px the budget is exact — 300 px of content minus 96 px of buttons and the gap leaves the pill 198 px, and four segments at 11.5 px need 194 of it — so `@media (max-width: 380px)` tightens segment padding, drops the saved-day dots when there are four segments, and shrinks the two buttons to `6px 8px`. If a fallback font ever overruns that, the pill scrolls horizontally rather than wrapping the header.
 
@@ -262,7 +290,7 @@ A hybrid: the page itself has depth (the fixed radial glow from `--bg-2` at the 
 
 ## Shapes
 
-Rounded, never round, except where a thing is a pill. Three radii cover the UI: `--r-sm` 8 px for the compact controls (Shuffle, the overflow trigger, the lock chips, the label inputs), `--r-md` 12 px for the tiles, the notice bar, the error box, the textarea and the manual screen's two buttons, and `--r-lg` 16 px for the sheet as a centred card. The day switcher and each segment are `999px` pills; the saved-day dot, the spinner and the four colour dots are circles. The one literal is the bottom sheet's `18px 18px 0 0` top corners, because 16 reads visibly tighter on a full-width edge.
+Rounded, never round, except where a thing is a pill. Three radii cover the UI: `--r-sm` 8 px for the compact controls (Shuffle, the overflow trigger, the padlocks, the name strips), `--r-md` 12 px for the tiles, the notice bar, the error box, the textarea and the manual screen's two buttons, and `--r-lg` 16 px for the sheet as a centred card. The day switcher and each segment are `999px` pills; the saved-day dot, the spinner and the four colour dots are circles. The one literal is the bottom sheet's `18px 18px 0 0` top corners, because 16 reads visibly tighter on a full-width edge.
 
 Tiles keep a `1.5px solid transparent` border in every state so a ring can replace a hairline without moving the word. Icons are drawn on a 16-unit grid at a 1.75 stroke with round caps and joins, `1em` square, sunk `-0.125em` under the baseline.
 
@@ -271,8 +299,10 @@ Tiles keep a `1.5px solid transparent` border in every state so a ring can repla
 ### Tiles
 Sixteen square buttons, `--tile-bg` with `--tile-border` and `--tile-shadow`, the word in the Tile type. State precedence: **locked** (the row's pastel, its dark text, no border, a soft glow) wins over **carried** (`--selected-bg` and `--selected-text`, a 2.5 px ring in `--selected-text`, `--selected-shadow`, following the pointer at `scale(1.04)`), then **picked up** (the same fill on a 2.5 px `--selected-ring`), then **drop target** (resting fill, a 3 px `--selected-ring`), then **resting**. A dropped swap ends in a **settle**: for one frame each of the two tiles holds the position and the look its new word had while the drag was live, then both are released and ease into their new cells over 0.15 s — the dropped word travelling the last few px from under the finger, the displaced one sliding across into the vacated cell — lifted above the board until they are at rest. A mouse hover lifts a resting tile `translateY(-2px)`; a press scales it to `0.97`; a locked tile does neither and shows a default cursor. Locking a row plays `lockPop` (0.45 s, overshoot to 1.07) while the glow flares. The board arrives with `tileIn` (0.42 s, `cubic-bezier(0.2, 0.7, 0.2, 1)`), each tile delayed `min(index × 22, 330)` ms so the grid cascades top-left to bottom-right.
 
-### Lock chip and label input
-The chip is a 30 px-floor button at `--fs-xs` 600, `7px 10px`, `--r-sm`, `line-height 1.15`. Unlocked it is transparent with `--text-muted` text and a `--border-strong` edge behind a ring icon; locked it fills with the row's pastel, its text goes to 800 and the icon becomes a check. The field beside it is `--fs-sm` on `--input-bg` with a `--input-border` edge (`--r-sm`, `6px 10px`, 30 px floor), and once the row is locked it recedes: the pastel at 13 % alpha (`22`) behind `--text-soft` text, with the pastel at 67 % alpha (`aa`) as its edge.
+### Lock line (padlock and row name)
+Each row's lock line is one full-width button with no fill or edge of its own — `--r-sm`, so the shared focus ring wraps the whole line with rounded corners, and `.btn`'s 1 px press nudge. The whole line is the target: a 30 px padlock beside a larger strip that did nothing sent thumbs to the strip, so the strip is part of the control, not a label beside it. There is nothing to type in a row.
+
+Inside it, the padlock is a 30 × 30 px-floor icon box (`--fs-lg` icon, `0 6px`, `--r-sm`, `line-height 1`). Unlocked it is transparent, an open padlock in `--text-muted` behind a `--border-strong` edge; a mouse hover anywhere on the line tints the box `--bg-2`, darkens its edge to `--text-faint` and the padlock to `--text` — the cue that the strip is part of the same control. Locked, fill and edge both take the row's pastel and the padlock closes in the pastel's dark text; a hover changes nothing there, because the locked rule sets all three of the properties the hover would. The strip beside it fills the rest of the line (30 px floor, `6px 10px`, `--r-sm`, `--fs-sm`): the row's colour name — Yellow, Green, Blue, Purple — in `--text-soft` at 500 on the pastel at `--row-tint`, and once the row is locked the full pastel with its dark text at 700. Both halves take the row's pastel from `--row-color` / `--row-text`, set inline on the row's group from `ROW_COLORS`, and the locked state from the button's own `aria-pressed`.
 
 ### Day switcher (segmented control)
 A `--surface` pill with a `--border` hairline, 2 px of padding and 2 px between segments; each segment is a 30 px-floor pill at 13 px 600 in `--text-muted`, the pressed one filled `--selected-bg` with `--selected-text`. A day with a saved board shows a 5 px `--text-faint` dot; a day being fetched shows a 9 px spinner in the same slot so nothing shifts. The same classes build the System / Light / Dark row in the sheet, where the pill takes `--bg` so it stays inset against the sheet's surface.
@@ -293,13 +323,13 @@ One line under the header when a day fails to load while a board is still on scr
 A native `<dialog>` on `--surface` under `--backdrop`, entering over 0.22 s from 16 px below. Rows are full-width, left-aligned, `--fs-lg` 600 in `--text`, separated by `--border` hairlines; a hint under a row is `--fs-xs` 500 in `--text-muted`. The Appearance strip leads; Reset comes last in its own group behind an 8 px band of `--bg` between two hairlines and is set in `--error-text`; Cancel is the closing row at `--fs-md` in `--text-muted`. Hover tints a row to `--bg-2`.
 
 ### Icons
-Six inline SVGs in `src/icons.jsx` — more, close, check, circle, arrow-up, external — each `aria-hidden`, `1em` square, in `currentColor`, with `.icon-before` / `.icon-after` adding a 0.3 em gap to the label beside them. They are decoration next to a visible label or an `aria-label`; the state they hint at is always also on the element as `aria-pressed`.
+Six inline SVGs in `src/icons.jsx` — more, close, lock, lock-open, arrow-up, external — each `aria-hidden`, `1em` square, in `currentColor`, with `.icon-before` / `.icon-after` adding a 0.3 em gap to the label beside them. They are decoration next to a visible label or an `aria-label`; the state they hint at is always also on the element as `aria-pressed`.
 
 ### Focus
 One ring for everything: `3px solid var(--focus-ring)` at a 2 px offset on any focused button, link or field. It tucks inside two things that would otherwise spill: segments (offset −1 px, inside the pill's padding) and sheet rows (offset −3 px, since a full-width row's outset ring hangs off both sides of the dialog).
 
 ### Motion
-Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 0.12 s and colour, background, border, shadow and opacity in 0.2 s; tiles ease transform in 0.15 s and shadow in 0.3 s; segments in 0.18 s. A carried tile drops its transition so it can keep up with the finger, and the single re-seat frame that starts a settle drops it for the same reason: nothing there is meant to move. Under `prefers-reduced-motion: reduce` the three entrances and the lock pop are set to `animation: none` and the four transitions to `none`, one selector each — and a dropped swap is not seeded at all there: with the tile transition off, the drop's own frame lands both tiles at rest in their new cells; the two spinners keep turning, because a small rotating ring is the only sign a fetch is in flight and is not vestibular motion.
+Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 0.12 s and colour, background, border, shadow and opacity in 0.2 s; tiles ease transform in 0.15 s and shadow in 0.3 s; segments in 0.18 s; a row's name strip eases background and colour in 0.2 s as it fills on a lock, and its padlock box eases background, edge and colour in 0.2 s alongside. A carried tile drops its transition so it can keep up with the finger, and the single re-seat frame that starts a settle drops it for the same reason: nothing there is meant to move. Under `prefers-reduced-motion: reduce` the three entrances and the lock pop are set to `animation: none` and the five transitions to `none`, one selector each — and a dropped swap is not seeded at all there: with the tile transition off, the drop's own frame lands both tiles at rest in their new cells; the two spinners keep turning, because a small rotating ring is the only sign a fetch is in flight and is not vestibular motion.
 
 ## Do's and Don'ts
 
@@ -311,7 +341,7 @@ Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 
 - **Do** carry state on `aria-pressed` / `aria-disabled` and hide the icon that restates it; keep the ring-and-drop treatment for picked-up, carried and drop-target tiles only.
 
 ### Don't:
-- **Don't** use the four pastels for anything but a locked row, and don't theme them.
+- **Don't** use the four pastels for anything but a row's name strip (at `--row-tint`) and a locked row (at full strength) — the four dots heading "How this works" are the one decorative exception — and don't theme them.
 - **Don't** set running text, hints, placeholders or the footer in `--text-faint`; stop at `--text-muted`.
 - **Don't** give a field `--border` or `--border-strong` as its edge — that is what `--input-border` is for — and never put an inline `outline: none` on one.
 - **Don't** add a text glyph (⋯ ✕ ✓ ○ ↑ ↗ or any other) as an icon; draw it in `src/icons.jsx`.

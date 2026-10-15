@@ -3,14 +3,18 @@
 // Owns the v2 per-day shape written under the "connections-puzzle" localStorage
 // key — { version, boards, active, activeDate } — where `boards` maps a key to
 // one board's play state (tiles, lockedRows, labels) plus its provenance
-// (source, date). A key is either a puzzle date in ISO form (that day's board)
-// or CUSTOM_KEY, the single slot for words the player typed in themselves. On
-// top of the schema this module owns every decision that depends on it: the
-// launch rule, day switching, the adopt-on-match merge, window pruning, and
-// the switcher's labels. Pure and framework-free so it can be unit-tested
-// without a DOM, like worker/puzzle.js; the app component stays a thin wiring
-// layer. Date arithmetic and the window size come from shared/puzzleDates.js,
-// the same module the Worker's date gate uses.
+// (source, date). `labels` is dead data: the per-row text field that filled it
+// is gone and the app never shows it, but this module still validates,
+// migrates and writes it (four empty strings on every new or reset board)
+// until #27 drops it.
+// A key is either a puzzle date in ISO form (that day's board) or CUSTOM_KEY,
+// the single slot for words the player typed in themselves. On top of the
+// schema this module owns every decision that depends on it: the launch rule,
+// day switching, the adopt-on-match merge, window pruning, and the switcher's
+// segment labels. Pure and framework-free so it can be unit-tested without a
+// DOM, like worker/puzzle.js; the app component stays a thin wiring layer.
+// Date arithmetic and the window size come from shared/puzzleDates.js, the
+// same module the Worker's date gate uses.
 //
 // `activeDate` is the ET date the active board was *activated* on (switched to
 // or created), never "last touched". The launch rule is "same ET day → resume,
