@@ -258,7 +258,7 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 ### Named Rules
 **The Five Steps Rule.** Type sizes are `--fs-xs` 12, `--fs-sm` 13, `--fs-md` 14, `--fs-lg` 15 and `--fs-xl` 20. The deliberate literals — pills and circles aside, which are `999px` and `50%` by definition — are the tile word (measured), the day switcher's 13 / 12 / 11.5 px segments (a 320 px budget tuned to the half-pixel in #15 — retune all of them together or not at all), and the 17 px dialog heading. Anything new picks a step.
 
-**The Weight Carries the Verb Rule.** If it reads as a *button*, it is 600 or heavier; if you only read it, it is 500 or lighter. There are two deliberate exceptions, one each way. The ghost buttons are quiet (400, bar Retry's 700). And a row's name is the label of its lock line yet reads first as a name, so it sits at 500 at rest — the padlock box carries the button affordance — and steps up to 700 as the strip fills to the full pastel: part of how the line says "locked", alongside the padlock closing, so the weight there carries state rather than a verb. Links are not buttons — the footer link stays at 400 too.
+**The Weight Carries the Verb Rule.** If it reads as a *button*, it is 600 or heavier; if you only read it, it is 500 or lighter. There are two deliberate exceptions, one each way. The ghost buttons are quiet (400, bar Retry's 700). And a row's name is the label of its lock line yet reads first as a name, so it sits at 500 at rest — the padlock box carries the button affordance — and steps up to 700 as the strip fills to the full pastel: part of how the line says "locked", alongside the padlock closing, so the weight there carries state rather than a verb. Links are not buttons — the footer link stays at 400 too, marked by its external-link icon at rest and an underline on hover.
 
 ## Layout
 
@@ -340,7 +340,7 @@ Every transition and keyframe lives in `index.css`. Buttons ease `transform` in 
 - **Do** take every colour from a token and add a light and a dark value when you add one; `src/theme.test.js` fails if `index.html`'s copies drift.
 - **Do** pick sizes from the five type steps and the three radii, and comment the reason wherever a literal is genuinely needed.
 - **Do** put a `min-height` (30 px for row controls, 36 px for header buttons, 32 × 32 for ghost buttons) on any new control rather than padding it up to size.
-- **Do** put hover, focus, media queries, keyframes and transitions in `index.css` behind a `className`; gate hover behind `(hover: hover)`, and decide per animation what reduced motion drops.
+- **Do** put hover, focus, media queries, keyframes and transitions in `index.css` behind a `className`, and keep any property a hover changes out of the inline style too — an inline value outranks the hover (#14, #33); gate hover behind `(hover: hover)`, and decide per animation what reduced motion drops.
 - **Do** carry state on `aria-pressed` / `aria-disabled` and hide the icon that restates it; keep the ring-and-drop treatment for picked-up, carried and drop-target tiles only.
 - **Do** look at any new state under DevTools → Rendering → `forced-colors: active`. A state that is only a fill or a shadow disappears there and needs a line in the forced-colours block.
 

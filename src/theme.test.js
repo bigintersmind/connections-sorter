@@ -74,8 +74,8 @@ describe("THEME_OPTIONS", () => {
   });
 });
 
-// index.css holds the palette; index.html and DESIGN.md hold hand-copies of
-// parts of it because neither can read a stylesheet. Everything below reads
+// index.css holds the tokens; index.html and DESIGN.md hold hand-copies of
+// some of them because neither can read a stylesheet. Everything below reads
 // the files once and pins the copies to the tokens.
 const css = read("./index.css");
 const html = read("../index.html");
@@ -138,6 +138,26 @@ describe("index.html and index.css agree with theme.js", () => {
       const expected = token(scheme, name);
       expect(expected, `${name} not found in the ${scheme} block`).toMatch(/^#/);
       expect(fallback(selector, prop), `no ${prop} rule for ${selector}`).toBe(expected);
+    });
+  });
+
+  // The fallback's two declared font sizes are copies too: its heading and
+  // muted line are type steps from index.css (#33). Its paragraphs set no size
+  // (the browser's 16px), so there is nothing else to pin.
+  describe("the fallback's sizes are type steps", () => {
+    const size = (selector) => {
+      const sel = selector.replace(/[.[\]]/g, "\\$&");
+      const rule = `^\\s*${sel}\\s*\\{[^}]*?(?<![-\\w])font-size:\\s*([\\d.]+px)`;
+      return html.match(new RegExp(rule, "m"))?.[1];
+    };
+    const step = (name) => css.match(new RegExp(`^\\s*${name}:\\s*([\\d.]+px)`, "m"))?.[1];
+
+    it.each([
+      [".seo-fallback h1", "--fs-xl"],
+      [".seo-fallback .muted", "--fs-md"],
+    ])("`%s` is %s", (selector, name) => {
+      expect(step(name), `${name} not found in index.css`).toMatch(/px$/);
+      expect(size(selector), `${selector}'s font-size`).toBe(step(name));
     });
   });
 

@@ -20,7 +20,9 @@
      exceptions are deliberate and commented where they sit: the tile word
      (measured by fitTileFont.js), the day switcher's segments (fitted to a
      320px header in #15), the sheet's 18px top corners and the "how this
-     works" heading. */
+     works" heading. --fs-xl and --fs-md are hand-copied into the fallback
+     <style> in index.html (its heading and muted line); theme.test.js pins
+     them. */
   --fs-xs: 12px;
   --fs-sm: 13px;
   --fs-md: 14px;
@@ -364,6 +366,10 @@ body::before {
   color: var(--text);
   border: 1px solid var(--border-strong);
 }
+/* The footer's official-game link rests without an underline. Set here, not
+   inline in styles.footerLink, for the same reason as the buttons above: an
+   inline `none` would outrank the hover underline below (#33). */
+.footer-link { text-decoration: none; }
 @media (hover: hover) {
   .btn-primary:not(:disabled):hover { background: var(--primary-hover); }
   /* Shuffle, the overflow trigger, Retry and Back all rest on --border-strong,
