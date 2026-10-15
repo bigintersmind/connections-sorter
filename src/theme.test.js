@@ -216,22 +216,23 @@ describe("the tokens hold the contrast their comments promise", () => {
   });
 });
 
-// The row name strips (.row-name in index.css). Unlocked, the colour name sits
-// in --text-soft on the row's pastel mixed to --row-tint with transparent — a
-// translucent fill over the page, which is a --bg-2 → --bg glow, so both ends
-// count. Locked, it sits in the row's own text on the full pastel, as the
-// locked padlock's icon does. Running text, so 4.5:1 throughout.
+// The row lock lines (.row-line in index.css, with the name in .row-name on
+// it). Unlocked, the colour name sits in --text-soft on the bar's fill, the
+// row's pastel mixed to --row-tint with transparent — a translucent fill over
+// the page, which is a --bg-2 → --bg glow, so both ends count. Locked, it sits
+// in the row's own text on the full pastel, as the locked padlock's icon does.
+// Running text, so 4.5:1 throughout.
 //
 // The pastels and their text come from ROW_COLORS in App.jsx, the copy that
 // renders. App.jsx renders JSX and isn't a Vitest module, so it's read as
 // text, as dragSwap.test.js reads it; the scrape is anchored on the literal's
 // own `const ROW_COLORS = [` and `];` lines, so a comment above it can't feed
 // it. A ratio computed here is only as good as its match to the CSS, so the
-// rules being modelled are pinned as well — the mix and the text color of the
-// unlocked strip, the fill and text of the locked strip and padlock, and the
-// --row-color / --row-text bridge App.jsx sets on each row. DESIGN.md's
-// `row-*` copies, which the palette check further down skips, are pinned to
-// ROW_COLORS here too.
+// rules being modelled are pinned as well — the mix on the unlocked bar and
+// the text color of the name on it, the fill of the locked bar and the text of
+// the locked name and padlock, and the --row-color / --row-text bridge App.jsx
+// sets on each row. DESIGN.md's `row-*` copies, which the palette check
+// further down skips, are pinned to ROW_COLORS here too.
 const app = read("./App.jsx");
 const rowColors = [
   ...(app.match(/^const ROW_COLORS = \[\n([\s\S]*?)^\];/m)?.[1] ?? "").matchAll(
@@ -239,7 +240,7 @@ const rowColors = [
   ),
 ].map(([, name, bg, text]) => ({ name, bg, text }));
 
-describe("the row name reads on its strip", () => {
+describe("the row name reads on its lock line", () => {
   const tint = (scheme) => {
     const pct = blocks[scheme].match(/^\s*--row-tint:\s*(\d+(?:\.\d+)?)%/m)?.[1];
     return pct === undefined ? undefined : Number(pct) / 100;
@@ -296,15 +297,22 @@ describe("the row name reads on its strip", () => {
     body.match(new RegExp(`(?<![-\\w])${prop}:\\s*([^;]+);`))?.[1].replace(/\s+/g, " ").trim();
 
   it("models the rules index.css and App.jsx actually set", () => {
-    const strip = rule(".row-name");
-    expect(decl(strip, "background"), ".row-name's background").toBe(
+    expect(decl(rule(".row-line"), "background"), ".row-line's background").toBe(
       "color-mix(in srgb, var(--row-color) var(--row-tint), transparent)",
     );
-    expect(decl(strip, "color"), ".row-name's color").toBe("var(--text-soft)");
+    expect(decl(rule(".row-name"), "color"), ".row-name's color").toBe("var(--text-soft)");
+    expect(decl(rule('.row-line[aria-pressed="true"]'), "background"), "the locked bar's background").toBe(
+      "var(--row-color)",
+    );
     for (const sel of ['.row-line[aria-pressed="true"] .row-name', '.row-line[aria-pressed="true"] .row-lock']) {
-      expect(decl(rule(sel), "background"), `${sel}'s background`).toBe("var(--row-color)");
       expect(decl(rule(sel), "color"), `${sel}'s color`).toBe("var(--row-text)");
     }
+    // The name and the padlock paint no fill of their own on a locked bar, so
+    // the pastel the ratio above assumes is really what's behind them.
+    expect(decl(rule('.row-line[aria-pressed="true"] .row-name'), "background"), "a locked name's own fill").toBeUndefined();
+    expect(decl(rule('.row-line[aria-pressed="true"] .row-lock'), "background"), "a locked padlock's own fill").toBe(
+      "transparent",
+    );
     expect(app, "App.jsx no longer sets --row-color / --row-text from ROW_COLORS").toContain(
       '"--row-color": color.bg, "--row-text": color.text',
     );

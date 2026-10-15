@@ -1044,15 +1044,16 @@ export default function ConnectionsOrganizer() {
               const color = ROW_COLORS[rowIdx];
 
               return (
-                // Each row is a lock line — a padlock and the row's colour name
-                // on a strip of its pastel — and four tiles; the group names
-                // it so a screen reader knows which row it's in. The whole
-                // line is one button, so a thumb that lands on the name locks
-                // the row as surely as one that finds the padlock. It's styled
-                // in index.css (.row-line / .row-lock / .row-name) and takes
-                // the row's pastel from the two custom properties set here,
-                // so ROW_COLORS stays the one place in the code the pastels
-                // are written.
+                // Each row is a lock line — one bar on a tint of the row's
+                // pastel, the padlock in a cell at its leading end and the
+                // row's colour name past a divider — and four tiles; the group
+                // names it so a screen reader knows which row it's in. The
+                // whole line is one button, and is drawn as one, so a thumb
+                // that lands on the name locks the row as surely as one that
+                // finds the padlock. It's styled in index.css (.row-line /
+                // .row-lock / .row-name) and takes the row's pastel from the
+                // two custom properties set here, so ROW_COLORS stays the one
+                // place in the code the pastels are written.
                 <div
                   key={rowIdx}
                   role="group"
@@ -1561,7 +1562,7 @@ const styles = {
   },
   // A row's lock line is .row-line / .row-lock / .row-name in index.css (it
   // needs a hover, a button reset, and the row's pastel from custom properties
-  // the row's group sets).
+  // the row's group sets; the bar's fill and edge are on the button itself).
   tileRow: {
     display: "grid",
     // minmax(0, 1fr), not 1fr: a 1fr track's min size is its content's
