@@ -2,11 +2,10 @@
 //
 // Owns the v2 per-day shape written under the "connections-puzzle" localStorage
 // key — { version, boards, active, activeDate } — where `boards` maps a key to
-// one board's play state (tiles, lockedRows, labels) plus its provenance
-// (source, date). `labels` is dead data: the per-row text field that filled it
-// is gone and the app never shows it, but this module still validates,
-// migrates and writes it (four empty strings on every new or reset board)
-// until #27 drops it.
+// one board's play state (tiles, lockedRows) plus its provenance (source,
+// date). Saves written before #27 also carry `labels`, from a per-row text
+// field that has since gone; boards are rebuilt field by field on every parse,
+// so the stale field drops away on the next persist with no version bump.
 // A key is either a puzzle date in ISO form (that day's board) or CUSTOM_KEY,
 // the single slot for words the player typed in themselves. On top of the
 // schema this module owns every decision that depends on it: the launch rule,
@@ -175,7 +174,7 @@ export function setCustom(store, words, todayISO) {
   return activate({ ...store, boards }, CUSTOM_KEY, todayISO);
 }
 
-// Apply play state (any subset of tiles/lockedRows/labels) to the active
+// Apply play state (tiles, lockedRows, or both) to the active
 // board. Returns the SAME store object when there is no active board or
 // nothing actually changed, so the app's persist effect can skip a write by
 // identity instead of diffing. Never touches activeDate: playing a board is
@@ -203,22 +202,15 @@ export function updateActive(store, patch) {
       changed = true;
     }
   }
-  if (patch.labels !== undefined) {
-    if (!isLabels(patch.labels)) throw new TypeError("updateActive: labels must be 4 strings");
-    if (!sameValues(board.labels, patch.labels)) {
-      next.labels = patch.labels;
-      changed = true;
-    }
-  }
   if (!changed) return store;
   return { ...store, boards: { ...store.boards, [key]: next } };
 }
 
-// Clear the active board's locks and labels, keeping its tiles where the
-// player left them (Reset unlocks the puzzle, it doesn't re-deal it). Same
+// Clear the active board's locks, keeping its tiles where the player left
+// them (Reset unlocks the puzzle, it doesn't re-deal it). Same
 // same-object-when-nothing-changes rule as updateActive.
 export function resetActive(store) {
-  return updateActive(store, { lockedRows: noLocks(), labels: noLabels() });
+  return updateActive(store, { lockedRows: noLocks() });
 }
 
 // The day switcher's segments, left to right: today and the two prior days,
@@ -287,7 +279,7 @@ function progressOf(store, key) {
 }
 
 function freshBoard(tiles, source, date) {
-  return { tiles, lockedRows: noLocks(), labels: noLabels(), source, date };
+  return { tiles, lockedRows: noLocks(), source, date };
 }
 
 // Validate a whole store into canonical form. Shared by parse and serialize so
@@ -314,11 +306,13 @@ function normalizeStore(data) {
 }
 
 // Validate one keyed board, or null if it isn't one. Tiles are the save —
-// invalid tiles reject the board. Locks and labels are recoverable decoration
-// and reset to defaults instead. The key decides the rest: a daily board takes
-// its date FROM its key (the two can never drift), while the custom board
-// carries the ET date it was typed on, which is the only thing that can age it
-// out — a custom board without one would live forever, so it's rejected.
+// invalid tiles reject the board. Locks and provenance are recoverable:
+// corrupt locks reset to none and an unrecognized source becomes "unknown",
+// and any other field (a pre-#27 board's `labels`) is left behind. The key
+// decides the rest: a daily board takes its date FROM its key (the two can
+// never drift), while the custom board carries the ET date it was typed on,
+// which is the only thing that can age it out — a custom board without one
+// would live forever, so it's rejected.
 function normalizeBoard(key, b) {
   const isDailyKey = isIsoDate(key);
   if (!isDailyKey && key !== CUSTOM_KEY) return null;
@@ -328,7 +322,6 @@ function normalizeBoard(key, b) {
   return {
     tiles: b.tiles,
     lockedRows: isLockedRows(b.lockedRows) ? b.lockedRows : noLocks(),
-    labels: isLabels(b.labels) ? b.labels : noLabels(),
     source: SOURCES.has(b.source) ? b.source : "unknown",
     date,
   };
@@ -353,7 +346,6 @@ function migrateTwoSlot(data, todayISO) {
       store.boards[key] = {
         tiles: board.tiles,
         lockedRows: board.lockedRows,
-        labels: board.labels,
         // ocr/demo/manual all become "manual" (words the player supplied, no
         // puzzle date); a board that never recorded where it came from stays
         // "unknown" rather than being given a provenance it didn't have.
@@ -384,7 +376,6 @@ function migrateFlat(data, todayISO) {
     store.boards[CUSTOM_KEY] = {
       tiles: board.tiles,
       lockedRows: board.lockedRows,
-      labels: board.labels,
       source: "unknown",
       date: todayISO,
     };
@@ -393,14 +384,14 @@ function migrateFlat(data, todayISO) {
 }
 
 // Read a board out of a pre-v2 save, where provenance lived on the board
-// itself rather than in the key. Returns the old fields verbatim (the caller
-// maps them into the new shape) or null if the tiles aren't a board.
+// itself rather than in the key. Returns the old fields that still mean
+// something (the caller maps them into the new shape; `labels` and
+// `chosenExplicitly` are left behind) or null if the tiles aren't a board.
 function readLegacyBoard(b) {
   if (!b || typeof b !== "object" || !isTiles(b.tiles)) return null;
   return {
     tiles: b.tiles,
     lockedRows: isLockedRows(b.lockedRows) ? b.lockedRows : noLocks(),
-    labels: isLabels(b.labels) ? b.labels : noLabels(),
     source: LEGACY_SOURCES.has(b.source) ? b.source : "unknown",
     date: isIsoDate(b.date) ? b.date : null,
   };
@@ -416,12 +407,7 @@ function isLockedRows(v) {
   return Array.isArray(v) && v.length === 4 && v.every((b) => typeof b === "boolean");
 }
 
-function isLabels(v) {
-  return Array.isArray(v) && v.length === 4 && v.every((s) => typeof s === "string");
-}
-
 const noLocks = () => [false, false, false, false];
-const noLabels = () => ["", "", "", ""];
 
 // Element-wise comparison of two same-shaped arrays, so updateActive can tell
 // a real change from a re-render handing back identical values.
