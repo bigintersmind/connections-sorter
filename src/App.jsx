@@ -228,12 +228,16 @@ export default function ConnectionsOrganizer() {
   // when a board is on screen, or inside the empty state when there is none.
   const [loadError, setLoadError] = useState(null);
   const [selected, setSelected] = useState(null);
-  // The last swap in words, for a screen reader: { key, text }. A keyboard
-  // swap leaves focus on a tile whose word has just changed and nothing else
-  // says so, so the hint's live region speaks it (#32). Keyed to the board it
-  // happened on, so a tap swap whose 200ms commit lands after a day switch
-  // never speaks over the new board. Cleared when the next tile is picked up,
-  // a shuffle moves the words, or another board lands.
+  // The last swap in words, for a screen reader: { key, text, id }. A
+  // keyboard swap leaves focus on a tile whose word has just changed and
+  // nothing else says so, so the hint's live region speaks it (#32). Keyed to
+  // the board it happened on, so a tap swap whose 200ms commit lands after a
+  // day switch never speaks over the new board. Cleared when a tile is picked
+  // up by tap, a shuffle moves the words, or a board lands (which also keeps
+  // a late note off the old board after a switch back); a committed drag
+  // replaces it. `id` re-keys the spoken span, so a note repeating the last
+  // one's words (a drag straight back) is still a new node and still
+  // announced.
   const [swapNote, setSwapNote] = useState(null);
   const [flashRow, setFlashRow] = useState(null);
   const [swapAnim, setSwapAnim] = useState(null);
@@ -431,9 +435,11 @@ export default function ConnectionsOrganizer() {
 
   // Back and Load Puzzle unmount the manual screen from under the button just
   // pressed, which drops focus to <body>: a keyboard or screen-reader user
-  // would start again from the top of the page. Hand it to the More button,
-  // where the manual screen is reached from (#32). Only on the way back from
-  // manual — on mount the first Tab has to land on Today (#10).
+  // would start again from the top of the page. Hand it to the More button:
+  // it's the usual way in, and it's on screen however the player arrived
+  // (#32). An effect rather than a call in the two handlers, because More
+  // isn't mounted until the board view is. Only on the way back from manual —
+  // on mount the first Tab has to land on Today (#10).
   const prevScreenRef = useRef(screen);
   useEffect(() => {
     if (prevScreenRef.current === "manual" && screen === "board") moreBtnRef.current?.focus();
@@ -446,18 +452,21 @@ export default function ConnectionsOrganizer() {
     fetchAbortRef.current?.abort(SUPERSEDED);
   }, []);
 
-  // The failure notice unmounts when it's dismissed or a board lands (a Retry
-  // that worked), and the button that had focus goes with it, dropping focus
-  // to <body>. Hand it to More first: it sits just before the notice, so the
-  // next Tab reaches the board as it would have from the notice (#32). Only
-  // when focus is in the notice — Safari doesn't focus a clicked button.
+  // A Retry that lands unmounts the failure notice, and the button with it,
+  // dropping focus to <body>. Hand it to More first: it sits just before the
+  // notice, so the next Tab reaches the board as it would have from the
+  // notice (#32). Only when focus is in the notice: landed() calls this on
+  // every path a board arrives by, and unguarded it would pull focus off the
+  // day segment just pressed, or onto More at launch so the first Tab skipped
+  // Today (#10).
   const moveFocusOffNotice = useCallback(() => {
     if (noticeRef.current?.contains(document.activeElement)) moreBtnRef.current?.focus();
   }, []);
 
   // Everything that becomes true the moment a board lands on screen, from any
-  // path: the launch blank is over, a stale failure message is gone, and no
-  // tile stays picked up from the board we just left.
+  // path: the launch blank is over, a stale failure message is gone (with
+  // focus handed off its notice first), and nothing from the board we just
+  // left carries over — no tile picked up, no swap still being reported.
   const landed = useCallback(() => {
     moveFocusOffNotice();
     setLaunching(false);
@@ -611,7 +620,11 @@ export default function ConnectionsOrganizer() {
       setSwapAnim({ a: selected, b: index });
       setTimeout(() => {
         commitSwap(selected, index, activeKey);
-        setSwapNote({ key: activeKey, text: `Swapped ${tiles[selected]} with ${tiles[index]}` });
+        setSwapNote((prev) => ({
+          key: activeKey,
+          text: `Swapped ${tiles[selected]} with ${tiles[index]}`,
+          id: (prev?.id ?? 0) + 1,
+        }));
         setSwapAnim(null);
         setSelected(null);
       }, 200);
@@ -712,7 +725,11 @@ export default function ConnectionsOrganizer() {
     // tile picked up earlier by tap stays picked up.
     if (over === null) return;
     commitSwap(press.from, over, press.key);
-    setSwapNote({ key: press.key, text: `Swapped ${tiles[press.from]} with ${tiles[over]}` });
+    setSwapNote((prev) => ({
+      key: press.key,
+      text: `Swapped ${tiles[press.from]} with ${tiles[over]}`,
+      id: (prev?.id ?? 0) + 1,
+    }));
     // Seed the settle in the SAME handler as the swap, so React batches the
     // two into one commit: the frame that swaps the words is the frame that
     // puts each tile back where its new word already was, and the player sees
@@ -847,6 +864,11 @@ export default function ConnectionsOrganizer() {
   }, []);
 
   const shuffleUnlocked = useCallback(() => {
+    // A tap swap commits 200ms after the second tap, by position: shuffled in
+    // between, it would trade two other words and its note would name the
+    // wrong pair. Refused while the swap animates, the same bail handleTap and
+    // handleTilePointerDown make for a press.
+    if (swapAnim) return;
     setStore((s) => {
       const active = s.active && s.boards[s.active];
       if (!active) return s;
@@ -863,7 +885,7 @@ export default function ConnectionsOrganizer() {
     });
     setSelected(null);
     setSwapNote(null);
-  }, []);
+  }, [swapAnim]);
 
   const openOverflow = useCallback(() => {
     setOverflowOpen(true);
@@ -1055,7 +1077,8 @@ export default function ConnectionsOrganizer() {
             <span>{loadError.message}</span>
             {/* aria-disabled rather than disabled while a load runs, so a
                 keyboard press keeps its focus here (see .ghost-btn in
-                index.css). */}
+                index.css). aria-disabled doesn't stop a click, so the
+                onClick checks fetchingKey itself. */}
             <button
               className="ghost-btn ghost-btn-action"
               onClick={() => { if (fetchingKey === null) loadDay(loadError.key); }}
@@ -1063,9 +1086,13 @@ export default function ConnectionsOrganizer() {
             >
               Retry
             </button>
+            {/* Dismissing unmounts the notice and this button with it, so
+                focus goes to More first, as for a Retry that lands (#32) —
+                unconditionally here, since the press always comes from this
+                button and Safari doesn't focus a clicked one. */}
             <button
               className="ghost-btn ghost-btn-end"
-              onClick={() => { moveFocusOffNotice(); setLoadError(null); }}
+              onClick={() => { moreBtnRef.current?.focus(); setLoadError(null); }}
               aria-label="Dismiss"
             >
               <CloseIcon />
@@ -1304,9 +1331,13 @@ export default function ConnectionsOrganizer() {
             {loadError && !fetchingKey ? (
               <>
                 <p style={styles.emptyText} role="status">{loadError.message}.</p>
+                {/* The spinner replaces this button the moment the load
+                    starts, taking focus with it to <body>, so hand focus to
+                    More first (#32). Unconditionally: the press always comes
+                    from here, and Safari doesn't focus a clicked button. */}
                 <button
                   className="btn small-btn"
-                  onClick={() => loadDay(loadError.key)}
+                  onClick={() => { moreBtnRef.current?.focus(); loadDay(loadError.key); }}
                 >
                   Retry
                 </button>
@@ -1353,8 +1384,9 @@ export default function ConnectionsOrganizer() {
             announced if the region was already there. It also speaks a swap,
             ahead of the resting instruction it flips back to, rather than the
             status above: that one carries a failed load for as long as the
-            notice shows, and a swap would either wait behind it or make it
-            repeat. Atomic so the two sentences are read as one. */}
+            notice shows, so a swap there would either have to wait for the
+            failure to clear or read the failure out again with it. Atomic so
+            the two sentences are read as one. */}
         <p style={styles.boardHint} aria-live="polite" aria-atomic="true">
           {!board ? (
             ""
@@ -1371,7 +1403,7 @@ export default function ConnectionsOrganizer() {
               {/* Spoken, not shown: a sighted player watches the two tiles
                   trade places. */}
               {swapNote && swapNote.key === activeKey && (
-                <span className="sr-only">{swapNote.text}. </span>
+                <span key={swapNote.id} className="sr-only">{swapNote.text}. </span>
               )}
               Tap a tile to select, then another to swap
             </>
