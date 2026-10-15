@@ -82,10 +82,10 @@ const html = read("../index.html");
 const design = read("../DESIGN.md");
 
 // The tokens sit in two blocks of one file: light before the
-// `:root[data-theme="dark"]` selector, dark after it (no token is redefined
-// further down the stylesheet). The selector is matched at the start of a
-// line so a mention of it in a comment can't split the file in the wrong
-// place.
+// `:root[data-theme="dark"]` selector, dark after it. Only the forced-colours
+// block at the end redefines any, and it points them at system colours, which
+// this hex-only reader skips. The selector is matched at the start of a line
+// so a mention of it in a comment can't split the file in the wrong place.
 const darkAt = css.search(/^:root\[data-theme="dark"\]/m);
 const blocks = { light: css.slice(0, darkAt), dark: css.slice(darkAt) };
 const token = (scheme, name) =>

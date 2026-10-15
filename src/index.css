@@ -812,6 +812,17 @@ textarea:focus-visible {
   100% { transform: scale(1); }
 }
 
+/* The empty state's loading ring, while there is no board to keep on screen.
+   Here rather than inline so the forced-colours block below can recolour it. */
+.spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--text);
+  animation: spin 0.8s linear infinite;
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Reduced motion, opted out one animation at a time rather than with a blanket
@@ -838,8 +849,8 @@ textarea:focus-visible {
    pointer's own motion, under the user's hand frame by frame — so it has
    nothing to opt out of.
 
-   The two spinners — `.seg-spin` here and the empty state's inline
-   `styles.spinner` in App.jsx — deliberately keep running. A 9px / 34px
+   The two spinners — `.seg-spin` and the empty state's `.spinner` —
+   deliberately keep running. A 9px / 34px
    rotating ring isn't the large-area, vestibular-trigger motion this query is
    about, and it is the only signal that a fetch is in flight: with a board on
    screen, freezing it leaves a reduced-motion user staring at nothing for up
@@ -855,4 +866,73 @@ textarea:focus-visible {
   .seg,
   .row-lock,
   .row-name { transition: none; }
+}
+
+/* Forced colours (Windows High Contrast; `forced-colors: active`). The user's
+   palette replaces every colour the page sets and drops every box-shadow, so
+   a state drawn only by a fill or a shadow vanishes (#31): the pressed day,
+   the picked-up and carried tile, a locked row's tiles, the drop target, the
+   saved-day dot, and both spinners' arcs, since every border comes out the
+   same colour. A system colour keyword survives, whether a rule here sets it
+   or a token resolves to it, even through an inline `var()`. So each state is
+   redrawn in the palette's own terms: Highlight for selection, GrayText for a
+   control that takes no input. Nothing here applies outside forced colours. */
+@media (forced-colors: active) {
+  /* The selected look is a Highlight fill. A picked-up tile, a carried one,
+     and the settle's seed frame standing in for the carried look all paint
+     these tokens inline (App.jsx); the pressed day and Appearance segments
+     paint them here. `[data-theme]` so this outranks the dark block.
+     --selected-bg is only ever a `background` shorthand, so it can carry a
+     layer: Chrome's Highlight is translucent, and a carried tile would show
+     the word on the tile under it, so the fill sits on Canvas. No ring and no
+     shadow, which also leaves the focus ring a gap to read across. */
+  :root,
+  :root[data-theme] {
+    --selected-bg: linear-gradient(Highlight, Highlight) Canvas;
+    --selected-text: HighlightText;
+    --selected-ring: transparent;
+    --selected-shadow: 0 0 transparent;
+  }
+  /* …and those elements have to opt out of forcing to show it. Chrome paints
+     a Canvas backplate behind all forced text, which on a Highlight fill
+     blanks HighlightText out wherever the two are close, as white on white is
+     in a light palette (forcing would drop the gradient layer, too). With
+     forcing off, everything they paint has to be a system colour or nothing,
+     which is why the ring and shadow tokens are re-pointed as well. The
+     opt-out inherits, so a pressed segment's spinner shows its arc in
+     HighlightText through the normal rule. */
+  .seg[aria-pressed="true"],
+  .tile-selected { forced-color-adjust: none; }
+  /* Chrome draws the forced focus ring in Highlight, which is now the colour
+     of the selected fill and of the drop target's ring. The palette's text
+     colour keeps focus a cue of its own… */
+  button:focus-visible,
+  a:focus-visible,
+  textarea:focus-visible { outline-color: CanvasText; }
+  /* …except on a pressed segment, where the ring is tucked against the fill
+     with no room for a gap, and a dark ring on a dark Highlight (as light
+     palettes have) reads as one slightly bigger pill. Inside the fill, in
+     the colour drawn on it, the two can't merge. */
+  .seg[aria-pressed="true"]:focus-visible {
+    outline-color: HighlightText;
+    outline-offset: -4px;
+  }
+
+  /* A locked row's tiles take no input, so they are drawn the way the palette
+     draws a disabled button. Their colours are inline, which only !important
+     outranks. This is the stylesheet's one use of it, because forced colours
+     is the one place a rule here has to beat the tiles' inline look. */
+  .tile[aria-disabled="true"] {
+    color: GrayText !important;
+    border-color: GrayText !important;
+  }
+  /* The drop target's ring is a box-shadow; App.jsx tags the tile wearing it
+     so the ring can be redrawn as an outline at the same 3px. */
+  .tile-target { outline: 3px solid Highlight; }
+
+  .seg-dot { background: ButtonText; }
+
+  /* The track takes the colour behind it, so only the arc shows and turns. */
+  .seg-spin { border-color: Canvas; border-top-color: ButtonText; }
+  .spinner { border-color: Canvas; border-top-color: CanvasText; }
 }
