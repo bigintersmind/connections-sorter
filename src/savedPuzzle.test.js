@@ -6,7 +6,7 @@
 // -screen redesign (connections-qdx):
 //
 //   1. Switching days is lossless in both directions: each day keeps its own
-//      locks and labels, and nothing but the player ever overwrites a board.
+//      tiles and locks, and nothing but the player ever overwrites a board.
 //   2. The launch rule is one sentence — same ET day resumes the board the
 //      player was on, a new ET day opens Today — and the ET day boundary
 //      (including across DST) is what flips it, never the UTC one.
@@ -53,19 +53,16 @@ const TILES = Array.from({ length: 16 }, (_, i) => `WORD${i}`);
 const OTHER_TILES = Array.from({ length: 16 }, (_, i) => `NEW${i}`);
 
 const NO_LOCKS = [false, false, false, false];
-const NO_LABELS = ["", "", "", ""];
 
 const board = (over = {}) => ({
   tiles: TILES,
   lockedRows: NO_LOCKS,
-  labels: NO_LABELS,
   source: "daily",
   ...over,
 });
 
 // A board with progress on it — the thing every losslessness test is about.
-const played = (over = {}) =>
-  board({ lockedRows: [true, false, true, false], labels: ["fish", "", "birds", ""], ...over });
+const played = (over = {}) => board({ lockedRows: [true, false, true, false], ...over });
 
 const daily = (date, over = {}) => board({ source: "daily", date, ...over });
 const custom = (date = TODAY, over = {}) => board({ source: "manual", date, ...over });
@@ -109,7 +106,7 @@ describe("parseStore — v2 shape", () => {
     {
       [TODAY]: daily(TODAY),
       [YESTERDAY]: played({ date: YESTERDAY }),
-      [CUSTOM_KEY]: custom(DAY_BEFORE, { labels: ["mine", "", "", ""] }),
+      [CUSTOM_KEY]: custom(DAY_BEFORE, { lockedRows: [false, false, false, true] }),
     },
     YESTERDAY,
     TODAY,
@@ -165,18 +162,40 @@ describe("parseStore — v2 shape", () => {
     );
   });
 
-  it("defaults corrupt locks/labels and an unrecognized source instead of dropping the board", () => {
-    // Tiles are the save; locks, labels, and provenance are recoverable.
+  it("defaults corrupt locks and an unrecognized source instead of dropping the board", () => {
+    // Tiles are the save; locks and provenance are recoverable.
     const raw = JSON.stringify(
-      storeOf({ [TODAY]: daily(TODAY, { lockedRows: [true], labels: "x", source: "telepathy" }) }),
+      storeOf({ [TODAY]: daily(TODAY, { lockedRows: [true], source: "telepathy" }) }),
     );
     expect(parseStore(raw, TODAY).boards[TODAY]).toEqual({
       tiles: TILES,
       lockedRows: NO_LOCKS,
-      labels: NO_LABELS,
       source: "unknown",
       date: TODAY,
     });
+  });
+
+  it("reads a save written before labels were dropped, tiles and locks intact (#27)", () => {
+    // Every board persisted before #27 carries `labels`, from the per-row text
+    // field that has since gone. There's no version bump: the board is rebuilt
+    // from the keys this module knows, so the stale field — well-formed or
+    // not — falls away, and the next persist writes the board without it.
+    const raw = JSON.stringify(
+      storeOf(
+        {
+          [TODAY]: played({ date: TODAY, labels: ["fish", "", "birds", ""] }),
+          [YESTERDAY]: daily(YESTERDAY, { labels: "x" }),
+        },
+        TODAY,
+        TODAY,
+      ),
+    );
+    const store = parseStore(raw, TODAY);
+    expect(store).toEqual(
+      storeOf({ [TODAY]: played({ date: TODAY }), [YESTERDAY]: daily(YESTERDAY) }, TODAY, TODAY),
+    );
+    expect(decideLaunch(store, TODAY)).toBe("resume");
+    expect(serializeStore(store)).not.toContain("labels");
   });
 
   it("keeps active only when its board survived, and activeDate only when ISO", () => {
@@ -254,7 +273,6 @@ describe("parseStore — two-slot migration", () => {
     expect(store.boards[TODAY]).toEqual({
       tiles: TILES,
       lockedRows: [true, false, false, false],
-      labels: ["fruit", "", "", ""],
       source: "daily",
       date: TODAY,
     });
@@ -287,7 +305,6 @@ describe("parseStore — two-slot migration", () => {
       expect(store.boards[CUSTOM_KEY]).toEqual({
         tiles: TILES,
         lockedRows: [true, false, false, false],
-        labels: ["fruit", "", "", ""],
         source: "manual",
         date: TODAY,
       });
@@ -361,7 +378,6 @@ describe("parseStore — flat legacy blob", () => {
     expect(store.boards[CUSTOM_KEY]).toEqual({
       tiles: TILES,
       lockedRows: [true, false, false, false],
-      labels: ["fruit", "", "", ""],
       source: "unknown",
       date: TODAY,
     });
@@ -369,10 +385,9 @@ describe("parseStore — flat legacy blob", () => {
     expect(decideLaunch(store, TODAY)).toBe("fetch-today");
   });
 
-  it("defaults missing locks/labels rather than dropping the save", () => {
+  it("defaults missing locks rather than dropping the save", () => {
     const store = parseStore(JSON.stringify({ tiles: TILES }), TODAY);
     expect(store.boards[CUSTOM_KEY].lockedRows).toEqual(NO_LOCKS);
-    expect(store.boards[CUSTOM_KEY].labels).toEqual(NO_LABELS);
   });
 
   it("is reclaimed by adopt-on-match when it holds today's words", () => {
@@ -525,7 +540,7 @@ describe("decideLaunch", () => {
 describe("activate", () => {
   const twoDays = () =>
     storeOf(
-      { [TODAY]: played({ date: TODAY }), [YESTERDAY]: daily(YESTERDAY, { labels: ["a", "b", "c", "d"] }) },
+      { [TODAY]: played({ date: TODAY }), [YESTERDAY]: daily(YESTERDAY, { lockedRows: [false, true, false, false] }) },
       TODAY,
       TODAY,
     );
@@ -568,7 +583,6 @@ describe("placeFetched", () => {
     expect(next.boards[TODAY]).toEqual({
       tiles: TILES,
       lockedRows: NO_LOCKS,
-      labels: NO_LABELS,
       source: "daily",
       date: TODAY,
     });
@@ -589,17 +603,16 @@ describe("placeFetched", () => {
   it("adopts a matching custom board — progress moves to the day, Custom clears", () => {
     // Contract #6: words typed during an outage turn out to be that day's
     // puzzle. Order, case, spacing, and Unicode composition are all
-    // irrelevant; the player's locks and labels are not.
+    // irrelevant; the player's arrangement and locks are not.
     const typed = [" el  niño ", "café", ...TILES.slice(2)];
     const fetched = ["CAFÉ", "EL NIÑO", ...[...TILES.slice(2)].reverse()];
     const store = deepFreeze(
-      storeOf({ [CUSTOM_KEY]: custom(TODAY, { tiles: typed, lockedRows: [true, true, false, false], labels: ["x", "y", "", ""] }) }, CUSTOM_KEY, TODAY),
+      storeOf({ [CUSTOM_KEY]: custom(TODAY, { tiles: typed, lockedRows: [true, true, false, false] }) }, CUSTOM_KEY, TODAY),
     );
     const next = placeFetched(store, { date: TODAY, words: fetched }, TODAY);
     expect(next.boards[TODAY]).toEqual({
       tiles: typed, // the player's own arrangement survives, not the fetch order
       lockedRows: [true, true, false, false],
-      labels: ["x", "y", "", ""],
       source: "daily",
       date: TODAY,
     });
@@ -658,7 +671,6 @@ describe("setCustom", () => {
     expect(next.boards[CUSTOM_KEY]).toEqual({
       tiles: TILES,
       lockedRows: NO_LOCKS,
-      labels: NO_LABELS,
       source: "manual",
       date: TODAY,
     });
@@ -705,12 +717,10 @@ describe("updateActive", () => {
     const next = updateActive(start(), {
       tiles: shuffled,
       lockedRows: [true, false, false, false],
-      labels: ["fish", "", "", ""],
     });
     expect(next.boards[TODAY]).toEqual({
       tiles: shuffled,
       lockedRows: [true, false, false, false],
-      labels: ["fish", "", "", ""],
       source: "daily",
       date: TODAY,
     });
@@ -728,12 +738,12 @@ describe("updateActive", () => {
 
   it("returns the SAME store when there is no active board", () => {
     const store = storeOf({ [TODAY]: daily(TODAY) });
-    expect(updateActive(store, { labels: ["a", "b", "c", "d"] })).toBe(store);
+    expect(updateActive(store, { lockedRows: [true, true, true, true] })).toBe(store);
     const dangling = storeOf({ [TODAY]: daily(TODAY) }, YESTERDAY, TODAY);
-    expect(updateActive(dangling, { labels: ["a", "b", "c", "d"] })).toBe(dangling);
+    expect(updateActive(dangling, { lockedRows: [true, true, true, true] })).toBe(dangling);
     // Nothing loaded yet: the app's play handlers can fire before the launch
     // fetch resolves, and a no-op is the right answer, not a crash.
-    expect(updateActive(null, { labels: ["a", "b", "c", "d"] })).toBe(null);
+    expect(updateActive(null, { lockedRows: [true, true, true, true] })).toBe(null);
   });
 
   it("does not touch activeDate — playing a board is not activating it", () => {
@@ -756,19 +766,17 @@ describe("updateActive", () => {
     const store = start();
     expect(() => updateActive(store, { tiles: TILES.slice(0, 15) })).toThrow(TypeError);
     expect(() => updateActive(store, { lockedRows: [true] })).toThrow(TypeError);
-    expect(() => updateActive(store, { labels: "fish" })).toThrow(TypeError);
   });
 });
 
 describe("resetActive", () => {
-  it("clears locks and labels but leaves the tiles where the player put them", () => {
+  it("clears locks but leaves the tiles where the player put them", () => {
     const sorted = [...TILES].reverse();
     const store = storeOf({ [TODAY]: played({ date: TODAY, tiles: sorted }) }, TODAY, TODAY);
     const next = resetActive(store);
     expect(next.boards[TODAY]).toEqual({
       tiles: sorted,
       lockedRows: NO_LOCKS,
-      labels: NO_LABELS,
       source: "daily",
       date: TODAY,
     });
