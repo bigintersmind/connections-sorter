@@ -164,7 +164,8 @@ components:
   row-lock:
     textColor: "{colors.text-muted}"
     padding: "0 6px"
-    size: "30px"
+    width: "30px"
+    height: "28px"
   row-lock-hover:
     backgroundColor: "{colors.bg-2}"
     textColor: "{colors.text}"
@@ -178,7 +179,6 @@ components:
     textColor: "{colors.row-text}"
     typography: "{typography.row-name-locked}"
     padding: "6px 10px"
-    height: "30px"
   sheet-item:
     textColor: "{colors.text}"
     padding: "14px 20px"
@@ -222,7 +222,7 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 ### Neutral
 - **Paper** (`--bg`, `#f1efe5` / `#131210`) is the page, and **Paper light** (`--bg-2`, `#faf8f1` / `#1c1a15`) is the top of the page glow and the fill a bordered button or a sheet row takes on hover.
 - **Card** (`--surface`, `#ffffff` / `#211f19`) is every raised thing — the notice bar, the small buttons, the day-switcher pill, the sheet — and **Tile** (`--tile-bg`, `#ffffff` / `#2b2820`) is the resting tile, with its own `--tile-text` and `--tile-border`.
-- **Text ramp** — `--text` (`#1b1813` / `#f2f0e6`) for anything you act on or must read; `--text-soft` (`#565347` / `#c4c1b4`) for explanatory copy, the notice's message and the name on an unlocked row's strip; `--text-muted` (`#6c695b` / `#9a978a`) for hints, placeholders, the footer, unpressed segments and the "Cancel" row; `--text-faint` (`#918d7c` / `#807d6f`) for the saved-day dot, disabled labels and a hover edge only.
+- **Text ramp** — `--text` (`#1b1813` / `#f2f0e6`) for anything you act on or must read; `--text-soft` (`#565347` / `#c4c1b4`) for explanatory copy, the notice's message and the name on an unlocked row's lock line; `--text-muted` (`#6c695b` / `#9a978a`) for hints, placeholders, the footer, unpressed segments and the "Cancel" row; `--text-faint` (`#918d7c` / `#807d6f`) for the saved-day dot, disabled labels and a hover edge only.
 - **Rules** — `--border` (`#e6e2d5` / `#322f27`) is the hairline between sheet rows and around cards; `--border-strong` (`#d6d1c1` / `#433f33`) is the edge of a bordered button, an unlocked row's lock line among them (where it is also the divider between the padlock's cell and the name). Neither is a field's edge.
 - **Field edge** (`--input-border`, `#8a8677` / `#706b5a`): the manual-entry textarea, the one field in the app. It sits at 3.16:1 against the light page and 3.65:1 against the field's white fill, 3.51:1 against the dark page and 3.29:1 against the dark field, so the boundary of a thing you can type in passes WCAG 1.4.11 in both schemes.
 - **Semantic** — `--error-text` on `--error-bg` (`#b53f33` on `#fbf1ef` light, 5.08:1; `#f0a89e` on `#2a1d1a` dark) for the manual screen's validation box and the sheet's Reset row; `--focus-ring` (`#1b1813` / `#f2f0e6`) for the one focus treatment; `--backdrop` behind the dialogs.
@@ -258,7 +258,7 @@ A single warm-neutral ramp in two schemes, plus the four puzzle pastels that sit
 
 A single centred column, `maxWidth: 500` with `12px 10px` of padding, on a page that is `min-height: 100dvh`. Safe-area insets (`env(safe-area-inset-*)`) are paid on `#root`, never on the column, so a notched phone in landscape keeps its full board width.
 
-The board is four rows, `gap: 14` between them. Each row is a lock line — one full-width bordered button, `marginBottom: 6`, holding the padlock's 30 px cell and, past a divider, the flex-filling name — above a `repeat(4, minmax(0, 1fr))` grid of square tiles with `gap: 6`. The `minmax(0, 1fr)` is load-bearing: a long unbreakable word must overflow its cell (and be shrunk to fit) rather than widen its column past the viewport.
+The board is four rows, `gap: 14` between them. Each row is a lock line — one full-width bordered button, `margin-bottom: 6px`, holding the padlock's 30 px cell and, past a divider, the flex-filling name — above a `repeat(4, minmax(0, 1fr))` grid of square tiles with `gap: 6`. The `minmax(0, 1fr)` is load-bearing: a long unbreakable word must overflow its cell (and be shrunk to fit) rather than widen its column past the viewport.
 
 The header is one row at every width: the day-switcher pill on the left, Shuffle and the overflow trigger on the right, `justifyContent: space-between` with a 6 px floor. At 320 px the budget is exact — 300 px of content minus 96 px of buttons and the gap leaves the pill 198 px, and four segments at 11.5 px need 194 of it — so `@media (max-width: 380px)` tightens segment padding, drops the saved-day dots when there are four segments, and shrinks the two buttons to `6px 8px`. If a fallback font ever overruns that, the pill scrolls horizontally rather than wrapping the header.
 

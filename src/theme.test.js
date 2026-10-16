@@ -195,8 +195,8 @@ const contrast = (a, b) => {
 // --surface is 3.09), so a nudge of either color — or of the fill behind it —
 // can drop below the floor without looking any different. These recompute the
 // ratios from the tokens themselves rather than trusting the comments. (The
-// row name strip's --row-tint has a block of its own below: its fill is a
-// mix, not a token.)
+// lock line's --row-tint has a block of its own below: its fill is a mix, not
+// a token.)
 describe("the tokens hold the contrast their comments promise", () => {
   const cases = [
     ["--input-border", "--bg", 3],
@@ -216,23 +216,28 @@ describe("the tokens hold the contrast their comments promise", () => {
   });
 });
 
-// The row lock lines (.row-line in index.css, with the name in .row-name on
-// it). Unlocked, the colour name sits in --text-soft on the bar's fill, the
-// row's pastel mixed to --row-tint with transparent — a translucent fill over
-// the page, which is a --bg-2 → --bg glow, so both ends count. Locked, it sits
-// in the row's own text on the full pastel, as the locked padlock's icon does.
-// Running text, so 4.5:1 throughout.
+// The row lock lines (.row-line in index.css: the padlock in .row-lock and the
+// name in .row-name, both on the bar's fill). Unlocked, the colour name sits
+// in --text-soft on that fill, the row's pastel mixed to --row-tint with
+// transparent — a translucent fill over the page, which is a --bg-2 → --bg
+// glow, so both ends count. Locked, it sits in the row's own text on the full
+// pastel, as the locked padlock's icon does. Running text, so 4.5:1
+// throughout. The open padlock, in --text-muted on the same tint, is an icon
+// and is held to 3:1 instead (see its test).
 //
 // The pastels and their text come from ROW_COLORS in App.jsx, the copy that
 // renders. App.jsx renders JSX and isn't a Vitest module, so it's read as
 // text, as dragSwap.test.js reads it; the scrape is anchored on the literal's
 // own `const ROW_COLORS = [` and `];` lines, so a comment above it can't feed
 // it. A ratio computed here is only as good as its match to the CSS, so the
-// rules being modelled are pinned as well — the mix on the unlocked bar and
-// the text color of the name on it, the fill of the locked bar and the text of
-// the locked name and padlock, and the --row-color / --row-text bridge App.jsx
-// sets on each row. DESIGN.md's `row-*` copies, which the palette check
-// further down skips, are pinned to ROW_COLORS here too.
+// rules being modelled are pinned as well: the mix on the unlocked bar; the
+// name's colour, and that the name paints no fill of its own in either state;
+// the locked bar's fill; the locked name's and padlock's colour; the resting
+// padlock's colour, and that its cell paints no fill at rest and a
+// `transparent` one locked; that no hover rule reaches the name or repaints
+// the bar behind it; and the --row-color / --row-text bridge App.jsx sets on
+// each row. DESIGN.md's `row-*` copies, which the palette check further down
+// skips, are pinned to ROW_COLORS here too.
 const app = read("./App.jsx");
 const rowColors = [
   ...(app.match(/^const ROW_COLORS = \[\n([\s\S]*?)^\];/m)?.[1] ?? "").matchAll(
@@ -247,7 +252,7 @@ describe("the row name reads on its lock line", () => {
   };
 
   // Source-over compositing of `fg` at `alpha` on an opaque `bg`, per sRGB
-  // channel — what the browser does with the translucent strip.
+  // channel — what the browser does with the bar's translucent fill.
   const over = (fg, alpha, bg) => {
     const ch = (hex, i) => parseInt(hex.slice(i, i + 2), 16);
     const mixed = [1, 3, 5].map((i) => Math.round(ch(fg, i) * alpha + ch(bg, i) * (1 - alpha)));
@@ -279,6 +284,22 @@ describe("the row name reads on its lock line", () => {
     expect(ratio, detail).toBeGreaterThanOrEqual(4.5);
   });
 
+  // The open padlock sits on the same tint, in --text-muted. It is an icon,
+  // not text, and aria-hidden, but with the bar's edge it carries the line's
+  // button affordance (DESIGN.md), so it is held to WCAG 1.4.11's 3:1 for a
+  // component's visual cue rather than to the name's 4.5:1. In dark this is
+  // the floor that binds: the name's would allow a tint of about 27%, the
+  // padlock's caps it at about 24.6% (yellow over --bg-2, 3.07:1 at 24%). In
+  // light the name binds first.
+  it.each(unlocked)("over %s, %s: the open padlock on the %s tint clears 3:1", (page, scheme, name, bg) => {
+    const [icon, behind] = [token(scheme, "--text-muted"), token(scheme, page)];
+    expect(icon, `--text-muted not found in the ${scheme} block`).toMatch(/^#/);
+    expect(behind, `${page} not found in the ${scheme} block`).toMatch(/^#/);
+    const ratio = contrast(icon, over(bg, tint(scheme), behind));
+    const detail = `--text-muted on ${name} (${bg}) at --row-tint over ${page} (${scheme}) is ${ratio.toFixed(2)}:1`;
+    expect(ratio, detail).toBeGreaterThanOrEqual(3);
+  });
+
   const locked = rowColors.map(({ name, bg, text }) => [name, text, bg]);
 
   it.each(locked)("locked: %s's text %s on its full pastel %s clears 4.5:1", (name, text, bg) => {
@@ -297,6 +318,11 @@ describe("the row name reads on its lock line", () => {
     body.match(new RegExp(`(?<![-\\w])${prop}:\\s*([^;]+);`))?.[1].replace(/\s+/g, " ").trim();
 
   it("models the rules index.css and App.jsx actually set", () => {
+    // Whether a rule body declares a fill at all: `background`,
+    // `background-color` or `background-image` followed by a colon, so the
+    // word in a `transition` list doesn't count.
+    const paintsFill = (body) => /(?<![-\w])background(?:-color|-image)?\s*:/.test(body);
+
     expect(decl(rule(".row-line"), "background"), ".row-line's background").toBe(
       "color-mix(in srgb, var(--row-color) var(--row-tint), transparent)",
     );
@@ -307,12 +333,35 @@ describe("the row name reads on its lock line", () => {
     for (const sel of ['.row-line[aria-pressed="true"] .row-name', '.row-line[aria-pressed="true"] .row-lock']) {
       expect(decl(rule(sel), "color"), `${sel}'s color`).toBe("var(--row-text)");
     }
-    // The name and the padlock paint no fill of their own on a locked bar, so
-    // the pastel the ratio above assumes is really what's behind them.
-    expect(decl(rule('.row-line[aria-pressed="true"] .row-name'), "background"), "a locked name's own fill").toBeUndefined();
+    // The name paints no fill of its own, unlocked or locked, so the bar's
+    // fill (the tint, then the full pastel) is what's behind it, as the ratios
+    // above assume. A fill restored on the base .row-name stacks a second tint
+    // on the bar's and drops dark yellow to about 2.9:1 while every ratio
+    // above still passes.
+    for (const sel of [".row-name", '.row-line[aria-pressed="true"] .row-name']) {
+      expect(paintsFill(rule(sel)), `${sel} paints a fill of its own over the bar's`).toBe(false);
+    }
+    // At rest the padlock's cell is fill-free too, and the icon is the
+    // --text-muted the 3:1 test above models.
+    expect(paintsFill(rule(".row-lock")), ".row-lock paints a fill of its own at rest").toBe(false);
+    expect(decl(rule(".row-lock"), "color"), ".row-lock's color").toBe("var(--text-muted)");
+    // Locked, the cell's `transparent` is load-bearing, not a no-op: the hover
+    // rule lights the cell --bg-2 at the same specificity, and this later rule
+    // is what beats it. Without it, a hovered locked padlock in dark is
+    // --row-text #1a1a1a on --bg-2 #1c1a15, about 1.00:1, which is invisible.
+    // Don't loosen this to toBeUndefined() and then delete the CSS line.
     expect(decl(rule('.row-line[aria-pressed="true"] .row-lock'), "background"), "a locked padlock's own fill").toBe(
       "transparent",
     );
+    // `rule` reads only rules that start a line, so it can't see inside
+    // `@media (hover: hover)`; the hover blocks are read whole instead. A hover
+    // may light the padlock's cell, but it must not reach the name or refill
+    // the bar behind it, since no ratio here models a hovered bar.
+    const hover = [...css.matchAll(/^@media \(hover: hover\) \{\n([\s\S]*?)^\}/gm)].map(([, b]) => b).join("");
+    expect(hover, "no (hover: hover) block found").not.toBe("");
+    expect(hover, "a hover rule reaches .row-name").not.toMatch(/\.row-name/);
+    const barHover = hover.match(/^\s*\.row-line:hover\s*\{([^}]*)\}/m)?.[1] ?? "";
+    expect(paintsFill(barHover), ".row-line:hover repaints the bar behind the name").toBe(false);
     expect(app, "App.jsx no longer sets --row-color / --row-text from ROW_COLORS").toContain(
       '"--row-color": color.bg, "--row-text": color.text',
     );
@@ -336,7 +385,7 @@ describe("the row name reads on its lock line", () => {
 // of UI — and nothing else keeps it honest. `foo-dark` is the dark block's
 // `--foo`; `foo` is the light block's. The `row-*` entries are skipped here
 // (they are the four puzzle pastels from ROW_COLORS in App.jsx, not CSS tokens
-// at all — the row-name block above pins them to ROW_COLORS instead) and so
+// at all — the lock-line block above pins them to ROW_COLORS instead) and so
 // are the two `backdrop` values, which are rgba() rather than hex.
 describe("DESIGN.md's palette is index.css's tokens", () => {
   const block = design.match(/^colors:\n((?:[ \t]+.*\n)+)/m)?.[1] ?? "";

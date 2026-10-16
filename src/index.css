@@ -69,10 +69,14 @@
      over the page's glow like any other translucent fill. Lower in dark: the
      four pastels are all light, and over near-black a stronger mix goes
      muddy and costs the name its 4.5:1 — theme.test.js recomputes --text-soft
-     on each tint, over both --bg and --bg-2, in both schemes. Neither value is
-     the ceiling, and dark is close to it: the floor allows about 45% here
-     (purple over --bg is the tightest, 4.86:1 at 36%) but only about 27% in
-     dark (yellow over --bg-2, 4.98:1 at 24%). The body::before grain isn't in
+     on each tint, over both --bg and --bg-2, in both schemes, and the open
+     padlock's --text-muted on the same tints at 3:1 (an icon, not text, but
+     with the edge it carries the button's affordance). In light the name
+     binds: purple over --bg is the tightest, 4.86:1 at 36%, and its floor
+     allows about 45% here. In dark the name's floor alone would allow about
+     27% (yellow over --bg-2, 4.98:1 at 24%), but the padlock binds first, at
+     3.07:1 on that same tint, and its 3:1 caps dark at about 24.6% — so dark
+     sits at its ceiling, not just close to it. The body::before grain isn't in
      that model and eats a little of the dark margin, so don't tune either
      value up to the computed edge. */
   --row-tint: 36%;
@@ -232,14 +236,15 @@ body::before {
    divider: a bordered box beside a tinted strip with a gap between them read
    as two controls, and a thumb that meant the padlock could land on the strip
    wondering whether it counted (it did). Styled here rather than inline, like
-   .small-btn, because the bar needs a hover and a button reset, and an inline
-   background would outrank the hover. The row's pastel reaches it through two
-   custom properties the row's group div sets inline from ROW_COLORS in
-   App.jsx (--row-color, --row-text), so the four pastels are still written in
-   exactly one place in the code (DESIGN.md's copy is pinned to it by
-   theme.test.js). The bar also carries `.btn` for its press nudge and the
-   transition on its fill and edge. Everything inside reads the locked state
-   off the button's own aria-pressed, so there is one source for it.
+   .small-btn, because the bar needs a hover, a locked state and a button
+   reset, and an inline background or border would outrank the rules that set
+   them. The row's pastel reaches it through two custom properties the row's
+   group div sets inline from ROW_COLORS in App.jsx (--row-color,
+   --row-text), so the four pastels are still written in exactly one place in
+   the code (DESIGN.md's copy is pinned to it by theme.test.js). The bar also
+   carries `.btn` for its press nudge and the transition on its fill and
+   edge. Everything inside reads the locked state off the button's own
+   aria-pressed, so there is one source for it.
 
    Unlocked, the bar wears the pastel at --row-tint — mixed with transparent,
    so it sits over the page's glow like any other translucent fill — behind a
