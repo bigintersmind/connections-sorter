@@ -63,16 +63,20 @@
      the field's own fill (WCAG 1.4.11) — `--border` and `--border-strong` are
      hairlines and bordered-button edges, never a field's. */
   --input-border: #8a8677;
-  /* How much of its pastel a row's name strip wears while the row is
+  /* How much of its pastel a row's lock line wears while the row is
      unlocked: a tint that names the row without claiming it is locked (the
-     full pastel means that). .row-name mixes it with transparent, so it sits
+     full pastel means that). .row-line mixes it with transparent, so it sits
      over the page's glow like any other translucent fill. Lower in dark: the
      four pastels are all light, and over near-black a stronger mix goes
      muddy and costs the name its 4.5:1 — theme.test.js recomputes --text-soft
-     on each tint, over both --bg and --bg-2, in both schemes. Neither value is
-     the ceiling, and dark is close to it: the floor allows about 45% here
-     (purple over --bg is the tightest, 4.86:1 at 36%) but only about 27% in
-     dark (yellow over --bg-2, 4.98:1 at 24%). The body::before grain isn't in
+     on each tint, over both --bg and --bg-2, in both schemes, and the open
+     padlock's --text-muted on the same tints at 3:1 (an icon, not text, but
+     with the edge it carries the button's affordance). In light the name
+     binds: purple over --bg is the tightest, 4.86:1 at 36%, and its floor
+     allows about 45% here. In dark the name's floor alone would allow about
+     27% (yellow over --bg-2, 4.98:1 at 24%), but the padlock binds first, at
+     3.07:1 on that same tint, and its 3:1 caps dark at about 24.6% — so dark
+     sits at its ceiling, not just close to it. The body::before grain isn't in
      that model and eats a little of the dark margin, so don't tune either
      value up to the computed edge. */
   --row-tint: 36%;
@@ -224,26 +228,39 @@ body::before {
 }
 .btn:not(:disabled):active { transform: translateY(1px); }
 
-/* Each row's lock line: a padlock and, beside it, the row's colour name on a
-   strip of its pastel — and the whole line is the one button that locks the
-   row, so the strip is target, not just label. Styled here rather than
-   inline, like .small-btn, because the line needs a hover and a button reset,
-   and an inline background would outrank the hover. The row's pastel reaches
-   both halves through two custom properties the row's group div sets inline
-   from ROW_COLORS in App.jsx (--row-color, --row-text), so the four pastels
-   are still written in exactly one place in the code (DESIGN.md's copy is
-   pinned to it by theme.test.js). The line also carries `.btn` for its press
-   nudge. Both halves read the locked state off the button's own aria-pressed,
-   so there is one source for it. */
+/* Each row's lock line: one bar, the row's colour name on a tint of its
+   pastel behind a hairline edge, with the padlock in a cell at its leading
+   end — and the whole bar is the one button that locks the row, so the name
+   is target, not label. The fill and the edge sit on the bar itself, not on
+   its two halves, and the padlock's cell is parted from the name only by a
+   divider: a bordered box beside a tinted strip with a gap between them read
+   as two controls, and a thumb that meant the padlock could land on the strip
+   wondering whether it counted (it did). Styled here rather than inline, like
+   .small-btn, because the bar needs a hover, a locked state and a button
+   reset, and an inline background or border would outrank the rules that set
+   them. The row's pastel reaches it through two custom properties the row's
+   group div sets inline from ROW_COLORS in App.jsx (--row-color,
+   --row-text), so the four pastels are still written in exactly one place in
+   the code (DESIGN.md's copy is pinned to it by theme.test.js). The bar also
+   carries `.btn` for its press nudge and the transition on its fill and
+   edge. Everything inside reads the locked state off the button's own
+   aria-pressed, so there is one source for it.
+
+   Unlocked, the bar wears the pastel at --row-tint — mixed with transparent,
+   so it sits over the page's glow like any other translucent fill — behind a
+   --border-strong edge, the edge of a bordered button. Locked, fill and edge
+   both take the full pastel, which with the padlock closing, the name's weight
+   stepping up and the tiles turning is the whole visual of "locked". */
 .row-line {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0;
   width: 100%;
+  min-height: 30px;
   margin: 0 0 6px;
   padding: 0;
-  background: none;
-  border: 0;
+  background: color-mix(in srgb, var(--row-color) var(--row-tint), transparent);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-sm);
   font-family: var(--font);
   color: inherit;
@@ -251,65 +268,75 @@ body::before {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-
-/* The padlock box. The 30px floor is the line's height, now that the line is
-   the target; the 15px icon plus 6px of side padding and the border comes to
-   29px, so the width rides on the floor too and the box stays square. */
+/* The padlock's cell at the bar's leading end. 30px wide, the bar's own
+   height (28px inside the bar's 1px edges, so the line stays at its 30px
+   floor); the 15px icon plus 6px of side padding and the divider comes to
+   28px, so the width rides on the floor. It has no fill of its own at rest —
+   the bar's tint shows through — and is parted from the name by a 1px divider
+   in the bar's edge colour. The inner radius on its outer corners is the
+   bar's minus the edge, so the hover fill below follows the bar's corner
+   instead of squaring it off. */
 .row-lock {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
+  align-self: stretch;
   min-width: 30px;
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 6px;
   color: var(--text-muted);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
+  border-right: 1px solid var(--border-strong);
+  border-radius: calc(var(--r-sm) - 1px) 0 0 calc(var(--r-sm) - 1px);
   font-size: var(--fs-lg);
   line-height: 1;
   transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
-/* A hover anywhere on the line lights the padlock — the cue that the strip is
-   part of the same control. */
+/* A hover anywhere on the bar darkens its edge and lights the padlock's cell
+   — the cue, on a pointer device, that the name is part of the same control. */
 @media (hover: hover) {
+  .row-line:hover { border-color: var(--text-faint); }
   .row-line:hover .row-lock {
     background: var(--bg-2);
     border-color: var(--text-faint);
     color: var(--text);
   }
 }
-/* Locked: the row's pastel. After the hover rule, at the same specificity, so
-   a hovered locked padlock keeps its fill. */
-.row-line[aria-pressed="true"] .row-lock {
+/* Locked: the bar takes the row's pastel, edge included, and the padlock
+   closes in the pastel's dark text; its cell keeps the bar's pastel (no fill
+   of its own), and the divider goes to the same dark at a fifth — enough to
+   keep the cell's shape, not enough to read as an edge. Both rules sit after
+   the hover rules, at the same specificity, and set every property those do,
+   so a hover changes nothing on a locked bar. */
+.row-line[aria-pressed="true"] {
   background: var(--row-color);
-  color: var(--row-text);
   border-color: var(--row-color);
 }
+.row-line[aria-pressed="true"] .row-lock {
+  background: transparent;
+  color: var(--row-text);
+  border-color: color-mix(in srgb, var(--row-text) 20%, transparent);
+}
 
-/* The name strip fills the rest of the line. Unlocked it wears the pastel at
-   --row-tint with the name in --text-soft; locked it takes the full pastel and
-   the pastel's dark text, and the name's weight steps up, which with the
-   padlock closing and the tiles turning is the whole visual of "locked". The
-   transition lives here so the reduced-motion block can reach it. */
+/* The name fills the rest of the bar, over the bar's own fill: in --text-soft
+   at 500 while the row is unlocked, and once it is locked in the pastel's
+   dark text at 700. The transition lives here so the reduced-motion block
+   can reach it. */
 .row-name {
   flex: 1;
   min-width: 0;
-  min-height: 30px;
+  min-height: 28px;
   display: flex;
   align-items: center;
   padding: 6px 10px;
-  border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--row-color) var(--row-tint), transparent);
   color: var(--text-soft);
   font-size: var(--fs-sm);
   font-weight: 500;
   line-height: 1.15;
   white-space: nowrap;
-  transition: background 0.2s ease, color 0.2s ease;
+  transition: color 0.2s ease;
 }
 .row-line[aria-pressed="true"] .row-name {
-  background: var(--row-color);
   color: var(--row-text);
   font-weight: 700;
 }
